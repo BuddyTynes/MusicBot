@@ -85,13 +85,25 @@ class MusicManager {
       channelId: voiceChannel.id,
       adapterCreator: guild.voiceAdapterCreator,
       selfDeaf: true,
+      debug: true,
     });
 
     connection.on("stateChange", (oldState, newState) => {
+      const oldNetworking = Reflect.get(oldState, "networking");
+      const newNetworking = Reflect.get(newState, "networking");
       logger.debug("Voice connection state change", {
         guildId: guild.id,
         from: oldState.status,
         to: newState.status,
+        oldNetworkingCode: oldNetworking?.state?.code,
+        newNetworkingCode: newNetworking?.state?.code,
+      });
+    });
+
+    connection.on("debug", (message) => {
+      logger.debug("Voice connection debug", {
+        guildId: guild.id,
+        message,
       });
     });
 
