@@ -35,6 +35,8 @@ copy .env.example .env
 ```env
 DISCORD_TOKEN=your_bot_token_here
 COMMAND_PREFIX=!
+LOG_LEVEL=info
+YT_DLP_TIMEOUT_MS=45000
 ```
 
 4. Run the bot:
@@ -57,3 +59,8 @@ npm start
 - The bot expects Suno URLs (`suno.com`).
 - If playback fails, ensure `ffmpeg` and `yt-dlp` both work from your terminal.
 - Depending on Suno or extractor changes, `yt-dlp` support may need updates.
+
+## Debug Logging
+
+- Set `LOG_LEVEL=debug` in `.env` for verbose connection and playback logs.
+- Start normally with `npm start` and watch terminal output.

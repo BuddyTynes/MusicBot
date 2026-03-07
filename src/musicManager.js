@@ -10,6 +10,7 @@ const {
 } = require("@discordjs/voice");
 const prism = require("prism-media");
 const { resolveStreamUrl } = require("./sunoResolver");
+const logger = require("./logger");
 
 class MusicManager {
   constructor(client) {
@@ -31,11 +32,25 @@ class MusicManager {
         textChannelId: null,
       });
 
+      logger.info("Created guild music state", { guildId });
+
+      player.on("stateChange", (oldState, newState) => {
+        logger.debug("Audio player state change", {
+          guildId,
+          from: oldState.status,
+          to: newState.status,
+        });
+      });
+
       player.on(AudioPlayerStatus.Idle, async () => {
         await this.playNext(guildId);
       });
 
       player.on("error", async (error) => {
+        logger.error("Audio player error", {
+          guildId,
+          error: logger.serializeError(error),
+        });
         await this.notify(guildId, `Playback error: ${error.message}`);
         await this.playNext(guildId);
       });
@@ -46,6 +61,11 @@ class MusicManager {
 
   async ensureConnection(guild, voiceChannel, textChannelId) {
     const state = this.getState(guild.id);
+    logger.info("Ensuring voice connection", {
+      guildId: guild.id,
+      voiceChannelId: voiceChannel.id,
+      hasExistingConnection: Boolean(state.connection),
+    });
 
     if (
       state.connection &&
@@ -67,13 +87,49 @@ class MusicManager {
       selfDeaf: true,
     });
 
-    await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
+    connection.on("stateChange", (oldState, newState) => {
+      logger.debug("Voice connection state change", {
+        guildId: guild.id,
+        from: oldState.status,
+        to: newState.status,
+      });
+    });
+
+    connection.on("error", (error) => {
+      logger.error("Voice connection error", {
+        guildId: guild.id,
+        voiceChannelId: voiceChannel.id,
+        error: logger.serializeError(error),
+      });
+    });
+
+    try {
+      await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
+    } catch (error) {
+      logger.error("Voice connection did not become ready", {
+        guildId: guild.id,
+        voiceChannelId: voiceChannel.id,
+        timeoutMs: 20000,
+        error: logger.serializeError(error),
+      });
+      connection.destroy();
+      throw error;
+    }
 
     state.connection = connection;
     state.textChannelId = textChannelId;
     connection.subscribe(state.player);
 
+    logger.info("Voice connection ready", {
+      guildId: guild.id,
+      voiceChannelId: voiceChannel.id,
+    });
+
     connection.on(VoiceConnectionStatus.Disconnected, () => {
+      logger.warn("Voice connection disconnected", {
+        guildId: guild.id,
+        voiceChannelId: voiceChannel.id,
+      });
       this.stop(guild.id, false);
     });
   }
@@ -81,6 +137,12 @@ class MusicManager {
   async enqueue(guildId, tracks) {
     const state = this.getState(guildId);
     state.queue.push(...tracks);
+    logger.info("Enqueued tracks", {
+      guildId,
+      added: tracks.length,
+      queueLength: state.queue.length,
+      currentlyPlaying: state.current ? state.current.title : null,
+    });
     if (!state.current) {
       await this.playNext(guildId);
     }
@@ -98,11 +160,22 @@ class MusicManager {
     const nextTrack = state.queue.shift();
     if (!nextTrack) {
       state.current = null;
+      logger.info("Queue ended", { guildId });
       return;
     }
 
     try {
+      logger.info("Resolving track stream URL", {
+        guildId,
+        title: nextTrack.title,
+        sourceUrl: nextTrack.sourceUrl,
+      });
       const streamUrl = await resolveStreamUrl(nextTrack.sourceUrl);
+      logger.debug("Resolved stream URL", {
+        guildId,
+        title: nextTrack.title,
+        streamUrl,
+      });
       const ffmpeg = new prism.FFmpeg({
         args: [
           "-i",
@@ -127,8 +200,19 @@ class MusicManager {
 
       state.current = nextTrack;
       state.player.play(resource);
+      logger.info("Playback started", {
+        guildId,
+        title: nextTrack.title,
+        remainingQueue: state.queue.length,
+      });
       await this.notify(guildId, `Now playing: ${nextTrack.title}`);
     } catch (error) {
+      logger.error("Track playback failed", {
+        guildId,
+        title: nextTrack.title,
+        sourceUrl: nextTrack.sourceUrl,
+        error: logger.serializeError(error),
+      });
       await this.notify(guildId, `Could not play track: ${nextTrack.title}`);
       await this.notify(guildId, `Reason: ${error.message}`);
       await this.playNext(guildId);
@@ -137,11 +221,21 @@ class MusicManager {
 
   skip(guildId) {
     const state = this.getState(guildId);
+    logger.info("Skipping current track", {
+      guildId,
+      current: state.current ? state.current.title : null,
+    });
     state.player.stop();
   }
 
   stop(guildId, clearConnection = true) {
     const state = this.getState(guildId);
+    logger.info("Stopping playback", {
+      guildId,
+      clearConnection,
+      queueLength: state.queue.length,
+      current: state.current ? state.current.title : null,
+    });
     state.queue = [];
     state.current = null;
     state.player.stop(true);
@@ -163,12 +257,25 @@ class MusicManager {
   async notify(guildId, content) {
     const state = this.getState(guildId);
     if (!state.textChannelId) {
+      logger.debug("Skipping notify due to missing text channel", {
+        guildId,
+        content,
+      });
       return;
     }
 
-    const channel = await this.client.channels.fetch(state.textChannelId);
-    if (channel && channel.isTextBased()) {
-      await channel.send(content);
+    try {
+      const channel = await this.client.channels.fetch(state.textChannelId);
+      if (channel && channel.isTextBased()) {
+        await channel.send(content);
+      }
+    } catch (error) {
+      logger.error("Failed to send text notification", {
+        guildId,
+        textChannelId: state.textChannelId,
+        content,
+        error: logger.serializeError(error),
+      });
     }
   }
 }

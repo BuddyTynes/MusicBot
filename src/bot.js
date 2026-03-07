@@ -7,6 +7,7 @@ const {
 } = require("discord.js");
 const { MusicManager } = require("./musicManager");
 const { isSunoUrl, extractTracksFromUrl } = require("./sunoResolver");
+const logger = require("./logger");
 
 const token = process.env.DISCORD_TOKEN;
 const prefix = process.env.COMMAND_PREFIX || "!";
@@ -50,9 +51,39 @@ function formatQueue(info) {
   return lines.join("\n");
 }
 
-client.once("ready", () => {
-  console.log(`Logged in as ${client.user.tag}`);
-  console.log(`Command prefix: ${prefix}`);
+client.once("clientReady", () => {
+  logger.info("Bot connected", {
+    userTag: client.user.tag,
+    userId: client.user.id,
+    prefix,
+    nodeVersion: process.version,
+  });
+});
+
+client.on("error", (error) => {
+  logger.error("Discord client error", { error: logger.serializeError(error) });
+});
+
+client.on("warn", (message) => {
+  logger.warn("Discord client warning", { message });
+});
+
+client.on("shardError", (error, shardId) => {
+  logger.error("Discord shard error", {
+    shardId,
+    error: logger.serializeError(error),
+  });
+});
+
+process.on("unhandledRejection", (reason) => {
+  logger.error("Unhandled promise rejection", {
+    reason:
+      reason instanceof Error ? logger.serializeError(reason) : { value: String(reason) },
+  });
+});
+
+process.on("uncaughtException", (error) => {
+  logger.error("Uncaught exception", { error: logger.serializeError(error) });
 });
 
 client.on("messageCreate", async (message) => {
@@ -70,6 +101,13 @@ client.on("messageCreate", async (message) => {
     .split(/\s+/);
 
   const command = rawCommand.toLowerCase();
+  logger.info("Received command", {
+    command,
+    guildId: message.guild.id,
+    channelId: message.channelId,
+    userId: message.author.id,
+    hasVoiceChannel: Boolean(message.member.voice.channel),
+  });
 
   try {
     if (command === "play") {
@@ -102,10 +140,23 @@ client.on("messageCreate", async (message) => {
         return;
       }
 
+      logger.info("Starting play request", {
+        guildId: message.guild.id,
+        channelId: message.channelId,
+        voiceChannelId: memberVoice.id,
+        input,
+      });
+
       await music.ensureConnection(message.guild, memberVoice, message.channelId);
 
       await message.reply("Reading link with yt-dlp...");
       const tracks = await extractTracksFromUrl(input);
+
+      logger.info("Resolved tracks from input", {
+        guildId: message.guild.id,
+        input,
+        trackCount: tracks.length,
+      });
 
       await music.enqueue(message.guild.id, tracks);
       await message.reply(`Queued ${tracks.length} track(s).`);
@@ -149,6 +200,22 @@ client.on("messageCreate", async (message) => {
       );
     }
   } catch (error) {
+    logger.error("Command execution failed", {
+      command,
+      guildId: message.guild?.id,
+      channelId: message.channelId,
+      userId: message.author.id,
+      args,
+      error: logger.serializeError(error),
+    });
+
+    if (error.message === "The operation was aborted") {
+      await message.reply(
+        "Error: Could not connect to voice in time. Check Connect/Speak permissions and outbound UDP on your server.",
+      );
+      return;
+    }
+
     await message.reply(`Error: ${error.message}`);
   }
 });
