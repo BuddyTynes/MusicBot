@@ -27,6 +27,23 @@ const client = new Client({
 
 const music = new MusicManager(client);
 
+client.ws.on("VOICE_STATE_UPDATE", (payload) => {
+  logger.debug("WS VOICE_STATE_UPDATE", {
+    guildId: payload.guild_id,
+    userId: payload.user_id,
+    channelId: payload.channel_id,
+    sessionId: payload.session_id,
+  });
+});
+
+client.ws.on("VOICE_SERVER_UPDATE", (payload) => {
+  logger.debug("WS VOICE_SERVER_UPDATE", {
+    guildId: payload.guild_id,
+    endpoint: payload.endpoint,
+    hasToken: Boolean(payload.token),
+  });
+});
+
 function formatQueue(info) {
   if (!info.current && info.upcoming.length === 0) {
     return "Queue is empty.";
