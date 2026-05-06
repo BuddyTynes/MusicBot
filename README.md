@@ -5,6 +5,7 @@ A Discord bot that accepts Suno song links and playlist links, queues them, and 
 ## Features
 
 - Queue a Suno song or playlist with one command
+- Queue public songs from a Suno profile
 - Basic queue controls (`play`, `queue`, `now`, `skip`, `stop`)
 - Automatic next-track playback
 - Uses `yt-dlp` for resolving Suno links
@@ -37,6 +38,10 @@ DISCORD_TOKEN=your_bot_token_here
 COMMAND_PREFIX=!
 LOG_LEVEL=info
 YT_DLP_TIMEOUT_MS=45000
+SUNO_MAX_PLAYLIST_TRACKS=1000
+SUNO_DEFAULT_PROFILE_TRACKS=25
+SUNO_MAX_PROFILE_TRACKS=500
+MAX_CONSECUTIVE_PLAYBACK_FAILURES=3
 ```
 
 4. Run the bot:
@@ -48,6 +53,7 @@ npm start
 ## Commands
 
 - `!play <suno-url>`: Add a Suno song or playlist URL to queue
+- `!profile <@handle|profile-url> [count|all] [top|recent]`: Queue public songs from a Suno profile
 - `!queue`: Show current queue
 - `!now`: Show currently playing track
 - `!skip`: Skip current track

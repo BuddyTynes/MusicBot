@@ -3,6 +3,11 @@ const https = require("node:https");
 const logger = require("./logger");
 
 const YT_DLP_TIMEOUT_MS = Number(process.env.YT_DLP_TIMEOUT_MS || 45000);
+const SUNO_API_BASE = "https://studio-api.prod.suno.com";
+const SUNO_PROFILE_PAGE_SIZE = 20;
+const SUNO_MAX_PLAYLIST_TRACKS = Math.max(1, Number(process.env.SUNO_MAX_PLAYLIST_TRACKS) || 1000);
+const SUNO_DEFAULT_PROFILE_TRACKS = Math.max(1, Number(process.env.SUNO_DEFAULT_PROFILE_TRACKS) || 25);
+const SUNO_MAX_PROFILE_TRACKS = Math.max(1, Number(process.env.SUNO_MAX_PROFILE_TRACKS) || 500);
 
 function trimForLog(value, maxLength = 500) {
   if (!value) {
@@ -99,6 +104,8 @@ function isValidUrl(input) {
 }
 
 const SUNO_PLAYLIST_UUID_RE = /\/playlist\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
+const SUNO_PROFILE_PATH_RE = /\/@([a-z0-9_]{3,30})(?:[/?#]|$)/i;
+const SUNO_HANDLE_RE = /^@?([a-z0-9_]{3,30})$/i;
 
 function httpsGet(url) {
   return new Promise((resolve, reject) => {
@@ -108,6 +115,54 @@ function httpsGet(url) {
       res.on("end", () => resolve({ status: res.statusCode, body: data, headers: res.headers }));
     }).on("error", reject);
   });
+}
+
+function httpsPostJson(url, body) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify(body);
+    const parsed = new URL(url);
+    const req = https.request(
+      parsed,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(payload),
+          "User-Agent": "Mozilla/5.0",
+        },
+      },
+      (res) => {
+        let data = "";
+        res.on("data", (chunk) => { data += chunk; });
+        res.on("end", () => resolve({ status: res.statusCode, body: data, headers: res.headers }));
+      },
+    );
+
+    req.on("error", reject);
+    req.write(payload);
+    req.end();
+  });
+}
+
+function clampPositiveInt(value, fallback, max) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return Math.min(Math.floor(parsed), max);
+}
+
+function parseJsonResponse(body, context) {
+  try {
+    return JSON.parse(body);
+  } catch (error) {
+    logger.error("Failed to parse JSON response", {
+      context,
+      bodyPreview: trimForLog(body),
+      error: logger.serializeError(error),
+    });
+    throw new Error(`Could not parse ${context} response.`);
+  }
 }
 
 // Resolve a Suno short URL (/s/<id>) to a full song UUID by following the redirect.
@@ -123,37 +178,99 @@ async function resolveSunoShortUrl(url) {
   return url;
 }
 
+function getClipFromEntry(entry) {
+  if (!entry) return null;
+  return entry.clip || entry.content_item?.clip || entry.content_item || entry.contentItem?.clip || entry.contentItem || entry;
+}
+
+function trackFromClip(clip, index) {
+  if (!clip?.id) return null;
+  return {
+    title: clip.title || `Suno Track ${index + 1}`,
+    sourceUrl: `https://suno.com/song/${clip.id}`,
+  };
+}
+
+function addClipTracks(entries, tracks, seenIds) {
+  let added = 0;
+  for (const entry of entries) {
+    const clip = getClipFromEntry(entry);
+    if (!clip?.id || seenIds.has(clip.id)) continue;
+    const track = trackFromClip(clip, tracks.length);
+    if (!track) continue;
+    seenIds.add(clip.id);
+    tracks.push(track);
+    added += 1;
+  }
+  return added;
+}
+
 async function extractSunoPlaylist(url) {
   const match = SUNO_PLAYLIST_UUID_RE.exec(url);
   if (!match) return null;
 
   const playlistId = match[1];
-  logger.info("Fetching Suno playlist via API", { playlistId });
+  const maxTracks = clampPositiveInt(SUNO_MAX_PLAYLIST_TRACKS, 1000, 5000);
+  const tracks = [];
+  const seenIds = new Set();
+  let nextCursor = null;
+  let currentPage = 1;
+  let playlistName = null;
+  let totalResults = null;
 
-  const { status, body } = await httpsGet(
-    `https://studio-api.prod.suno.com/api/playlist/${playlistId}`
-  );
+  logger.info("Fetching Suno playlist via API", { playlistId, maxTracks });
 
-  if (status !== 200) {
-    logger.warn("Suno playlist API returned non-200", { playlistId, status });
-    return null;
-  }
+  do {
+    const requestUrl = new URL(`${SUNO_API_BASE}/api/playlist/${playlistId}`);
+    if (nextCursor) {
+      requestUrl.searchParams.set("cursor", nextCursor);
+    } else {
+      requestUrl.searchParams.set("page", String(currentPage));
+    }
 
-  const data = JSON.parse(body);
-  const clips = data.playlist_clips;
-  if (!Array.isArray(clips) || clips.length === 0) return null;
+    const { status, body } = await httpsGet(requestUrl.href);
 
-  const tracks = clips
-    .filter((c) => c.clip?.audio_url && c.clip?.id)
-    .map((c) => ({
-      title: c.clip.title || c.clip.id,
-      sourceUrl: `https://suno.com/song/${c.clip.id}`,
-    }));
+    if (status !== 200) {
+      logger.warn("Suno playlist API returned non-200", {
+        playlistId,
+        status,
+        currentPage,
+      });
+      return tracks.length > 0 ? tracks : null;
+    }
+
+    const data = parseJsonResponse(body, "Suno playlist");
+    const clips = Array.isArray(data.playlist_clips) ? data.playlist_clips : [];
+    if (!playlistName) playlistName = data.name;
+    totalResults = data.num_total_results ?? totalResults;
+
+    const added = addClipTracks(clips, tracks, seenIds);
+    logger.info("Fetched Suno playlist page", {
+      playlistId,
+      currentPage: data.current_page || currentPage,
+      added,
+      runningCount: tracks.length,
+      totalResults,
+    });
+
+    nextCursor = data.next_cursor || null;
+    currentPage += 1;
+    if (tracks.length >= maxTracks) {
+      tracks.length = maxTracks;
+      break;
+    }
+    if (clips.length === 0 || added === 0) {
+      break;
+    }
+  } while (nextCursor);
+
+  if (tracks.length === 0) return null;
 
   logger.info("Extracted Suno playlist tracks", {
     playlistId,
-    name: data.name,
+    name: playlistName,
     count: tracks.length,
+    totalResults,
   });
 
   return tracks;
@@ -167,6 +284,123 @@ function normalizeTrack(entry, fallbackUrl, index) {
   };
 }
 
+function getSunoProfileHandle(input) {
+  if (!input) return null;
+
+  const trimmed = input.trim();
+  if (isValidUrl(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      if (!parsed.hostname.includes("suno.com")) return null;
+      const match = SUNO_PROFILE_PATH_RE.exec(parsed.pathname);
+      return match ? match[1].toLowerCase() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  const handleMatch = SUNO_HANDLE_RE.exec(trimmed);
+  return handleMatch ? handleMatch[1].toLowerCase() : null;
+}
+
+function isSunoProfileInput(input) {
+  return Boolean(getSunoProfileHandle(input));
+}
+
+function getProfileTrackCount(count) {
+  if (String(count).toLowerCase() === "all") {
+    return clampPositiveInt(SUNO_MAX_PROFILE_TRACKS, 500, 5000);
+  }
+  return clampPositiveInt(count, SUNO_DEFAULT_PROFILE_TRACKS, SUNO_MAX_PROFILE_TRACKS);
+}
+
+function getProfileSortKey(sort) {
+  return sort === "top" ? "upvote_count" : "created_at";
+}
+
+async function fetchSunoProfileTracks(input, options = {}) {
+  const handle = getSunoProfileHandle(input);
+  if (!handle) {
+    throw new Error("Could not find a Suno profile handle in that input.");
+  }
+
+  const count = getProfileTrackCount(options.count);
+  const sortKey = getProfileSortKey(options.sort);
+  const tracks = [];
+  const seenIds = new Set();
+
+  logger.info("Fetching Suno profile", { handle, count, sortKey });
+
+  const profileUrl = new URL(`${SUNO_API_BASE}/api/profiles/${handle}`);
+  profileUrl.searchParams.set("playlists_sort_by", "created_at");
+  profileUrl.searchParams.set("clips_sort_by", sortKey);
+
+  const { status, body } = await httpsGet(profileUrl.href);
+  if (status !== 200) {
+    logger.warn("Suno profile API returned non-200", { handle, status });
+    throw new Error(`Could not fetch Suno profile @${handle} (HTTP ${status}).`);
+  }
+
+  const profile = parseJsonResponse(body, "Suno profile");
+  if (!profile.user_id) {
+    throw new Error(`Could not resolve Suno profile @${handle}.`);
+  }
+
+  let nextCursor = null;
+  do {
+    const pageSize = Math.min(SUNO_PROFILE_PAGE_SIZE, count - tracks.length);
+    const requestBody = {
+      feed_id: "user_songs",
+      target_user_id: profile.user_id,
+      request_metadata: { sort_by: sortKey },
+      page_size: pageSize,
+    };
+    if (nextCursor) {
+      requestBody.cursor = nextCursor;
+    }
+
+    const { status: feedStatus, body: feedBody } = await httpsPostJson(
+      `${SUNO_API_BASE}/api/unified/feed`,
+      requestBody,
+    );
+
+    if (feedStatus !== 200) {
+      logger.warn("Suno profile feed API returned non-200", {
+        handle,
+        status: feedStatus,
+        nextCursor,
+      });
+      break;
+    }
+
+    const data = parseJsonResponse(feedBody, "Suno profile feed");
+    const feed = data.feed || {};
+    const items = Array.isArray(feed.items) ? feed.items : [];
+    const added = addClipTracks(items, tracks, seenIds);
+
+    logger.info("Fetched Suno profile songs page", {
+      handle,
+      added,
+      runningCount: tracks.length,
+      nextCursor: feed.next_cursor || null,
+    });
+
+    nextCursor = feed.next_cursor || null;
+    if (items.length === 0 || added === 0) {
+      break;
+    }
+  } while (nextCursor && tracks.length < count);
+
+  return {
+    tracks,
+    profile: {
+      handle: profile.handle || handle,
+      displayName: profile.display_name || handle,
+      userId: profile.user_id,
+    },
+  };
+}
+
 async function extractTracksFromUrl(url) {
   logger.info("Extracting tracks from URL", { url });
 
@@ -175,6 +409,11 @@ async function extractTracksFromUrl(url) {
     const tracks = await extractSunoPlaylist(url);
     if (tracks && tracks.length > 0) return tracks;
     // Fall through to yt-dlp if API fails
+  }
+
+  if (isSunoUrl(url) && isSunoProfileInput(url)) {
+    const { tracks } = await fetchSunoProfileTracks(url);
+    if (tracks.length > 0) return tracks;
   }
 
   const output = await runYtDlp([
@@ -320,7 +559,9 @@ async function fetchRadioSongTracks(songUrl, count = 10) {
 module.exports = {
   isSunoUrl,
   isValidUrl,
+  isSunoProfileInput,
   extractTracksFromUrl,
+  fetchSunoProfileTracks,
   resolveStreamUrl,
   fetchRadioTracks,
   fetchRadioSongTracks,

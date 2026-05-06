@@ -6,7 +6,15 @@ const {
   PermissionsBitField,
 } = require("discord.js");
 const { MusicManager } = require("./musicManager");
-const { isSunoUrl, isValidUrl, extractTracksFromUrl, fetchRadioTracks, fetchRadioSongTracks } = require("./sunoResolver");
+const {
+  isSunoUrl,
+  isValidUrl,
+  isSunoProfileInput,
+  extractTracksFromUrl,
+  fetchSunoProfileTracks,
+  fetchRadioTracks,
+  fetchRadioSongTracks,
+} = require("./sunoResolver");
 const logger = require("./logger");
 
 const token = process.env.DISCORD_TOKEN;
@@ -66,6 +74,29 @@ function formatQueue(info) {
   }
 
   return lines.join("\n");
+}
+
+function parseProfileRequest(args) {
+  const input = args[0];
+  let count;
+  let sort = "new";
+
+  for (const rawArg of args.slice(1)) {
+    const arg = rawArg.toLowerCase();
+    if (arg === "top") {
+      sort = "top";
+    } else if (arg === "recent" || arg === "new") {
+      sort = "new";
+    } else if (arg === "all") {
+      count = "all";
+    } else if (/^\d+$/.test(arg)) {
+      count = Number(arg);
+    } else {
+      throw new Error(`Unknown profile option: ${rawArg}`);
+    }
+  }
+
+  return { input, count, sort };
 }
 
 client.once("clientReady", () => {
@@ -166,7 +197,7 @@ client.on("messageCreate", async (message) => {
 
       await music.ensureConnection(message.guild, memberVoice, message.channelId);
 
-      await message.reply("Reading link with yt-dlp...");
+      await message.reply("Reading link...");
       const tracks = await extractTracksFromUrl(input);
 
       logger.info("Resolved tracks from input", {
@@ -177,6 +208,50 @@ client.on("messageCreate", async (message) => {
 
       await music.enqueue(message.guild.id, tracks);
       await message.reply(`Queued ${tracks.length} track(s).`);
+      return;
+    }
+
+    if (command === "profile") {
+      const { input, count, sort } = parseProfileRequest(args);
+      if (!input) {
+        await message.reply(`Usage: ${prefix}profile <@handle|profile-url> [count|all] [top|recent]`);
+        return;
+      }
+
+      if (!isSunoProfileInput(input)) {
+        await message.reply("Please provide a Suno profile handle or profile URL.");
+        return;
+      }
+
+      const memberVoice = message.member.voice.channel;
+      if (!memberVoice) {
+        await message.reply("Join a voice channel first.");
+        return;
+      }
+
+      const me = message.guild.members.me;
+      const permissions = memberVoice.permissionsFor(me);
+
+      if (
+        !permissions ||
+        !permissions.has(PermissionsBitField.Flags.Connect) ||
+        !permissions.has(PermissionsBitField.Flags.Speak)
+      ) {
+        await message.reply("I need Connect and Speak permissions in your voice channel.");
+        return;
+      }
+
+      await music.ensureConnection(message.guild, memberVoice, message.channelId);
+      await message.reply(`Fetching ${sort === "top" ? "top" : "recent"} public Suno songs...`);
+
+      const { tracks, profile } = await fetchSunoProfileTracks(input, { count, sort });
+      if (tracks.length === 0) {
+        await message.reply(`No public songs found for @${profile.handle}.`);
+        return;
+      }
+
+      await music.enqueue(message.guild.id, tracks);
+      await message.reply(`Queued ${tracks.length} public song(s) from ${profile.displayName} (@${profile.handle}).`);
       return;
     }
 
@@ -222,7 +297,7 @@ client.on("messageCreate", async (message) => {
         return;
       }
 
-      await message.reply("Reading link with yt-dlp...");
+      await message.reply("Reading link...");
       const tracks = await extractTracksFromUrl(input);
 
       if (tracks.length === 0) {
@@ -306,6 +381,7 @@ client.on("messageCreate", async (message) => {
           "```",
           `${prefix}play <url>     — play a song or playlist (Suno or YouTube)`,
           `${prefix}playlist <url> — alias for ${prefix}play`,
+          `${prefix}profile <@handle|url> [count|all] [top|recent] — queue public Suno profile songs`,
           `${prefix}next <url>     — force a song to play next in queue`,
           `${prefix}radio          — queue 10 random trending Suno songs`,
           `${prefix}radio-song <url> — queue 10 songs similar to a Suno song`,

@@ -12,6 +12,11 @@ const prism = require("prism-media");
 const { resolveStreamUrl } = require("./sunoResolver");
 const logger = require("./logger");
 
+const MAX_CONSECUTIVE_PLAYBACK_FAILURES = Math.max(
+  1,
+  Number(process.env.MAX_CONSECUTIVE_PLAYBACK_FAILURES) || 3,
+);
+
 class MusicManager {
   constructor(client) {
     this.client = client;
@@ -30,6 +35,7 @@ class MusicManager {
         queue: [],
         current: null,
         textChannelId: null,
+        consecutivePlaybackFailures: 0,
       });
 
       logger.info("Created guild music state", { guildId });
@@ -51,8 +57,8 @@ class MusicManager {
           guildId,
           error: logger.serializeError(error),
         });
-        await this.notify(guildId, `Playback error: ${error.message}`);
-        await this.playNext(guildId);
+        const state = this.getState(guildId);
+        await this.handlePlaybackFailure(guildId, state.current, error);
       });
     }
 
@@ -190,6 +196,7 @@ class MusicManager {
     const nextTrack = state.queue.shift();
     if (!nextTrack) {
       state.current = null;
+      state.consecutivePlaybackFailures = 0;
       logger.info("Queue ended", { guildId });
       return;
     }
@@ -208,12 +215,25 @@ class MusicManager {
       });
       const ffmpeg = new prism.FFmpeg({
         args: [
+          "-reconnect",
+          "1",
+          "-reconnect_streamed",
+          "1",
+          "-reconnect_delay_max",
+          "5",
+          "-fflags",
+          "+genpts",
+          "-probesize",
+          "32M",
+          "-analyzeduration",
+          "10M",
           "-i",
           streamUrl,
-          "-analyzeduration",
-          "0",
+          "-vn",
           "-loglevel",
           "warning",
+          "-af",
+          "aresample=async=1:first_pts=0",
           "-f",
           "s16le",
           "-ar",
@@ -233,6 +253,7 @@ class MusicManager {
       });
 
       state.current = nextTrack;
+      state.consecutivePlaybackFailures = 0;
       state.player.play(resource);
       logger.info("Playback started", {
         guildId,
@@ -247,10 +268,46 @@ class MusicManager {
         sourceUrl: nextTrack.sourceUrl,
         error: logger.serializeError(error),
       });
-      await this.notify(guildId, `Could not play track: ${nextTrack.title}`);
-      await this.notify(guildId, `Reason: ${error.message}`);
-      await this.playNext(guildId);
+      await this.handlePlaybackFailure(guildId, nextTrack, error);
     }
+  }
+
+  async handlePlaybackFailure(guildId, track, error) {
+    const state = this.getState(guildId);
+    const failureCount = state.consecutivePlaybackFailures + 1;
+    state.consecutivePlaybackFailures = failureCount;
+    state.current = null;
+
+    const title = track?.title || "current track";
+    const reason = error?.message || "Unknown playback error";
+
+    if (failureCount >= MAX_CONSECUTIVE_PLAYBACK_FAILURES) {
+      const skippedCount = state.queue.length;
+      state.queue = [];
+      state.consecutivePlaybackFailures = 0;
+      state.player.stop(true);
+
+      logger.warn("Stopping after consecutive playback failures", {
+        guildId,
+        failureCount,
+        maxFailures: MAX_CONSECUTIVE_PLAYBACK_FAILURES,
+        skippedCount,
+        lastTrack: title,
+        reason,
+      });
+
+      await this.notify(
+        guildId,
+        `Stopped after ${failureCount} playback failures in a row. Last error: ${reason}`,
+      );
+      return;
+    }
+
+    await this.notify(
+      guildId,
+      `Could not play ${title} (${failureCount}/${MAX_CONSECUTIVE_PLAYBACK_FAILURES}): ${reason}`,
+    );
+    await this.playNext(guildId);
   }
 
   playNextTrack(guildId, track) {
@@ -292,6 +349,7 @@ class MusicManager {
     });
     state.queue = [];
     state.current = null;
+    state.consecutivePlaybackFailures = 0;
     state.player.stop(true);
 
     if (clearConnection && state.connection) {
