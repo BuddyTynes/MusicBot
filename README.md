@@ -6,9 +6,10 @@ A Discord bot that accepts Suno song links and playlist links, queues them, and 
 
 - Queue a Suno song or playlist with one command
 - Queue public songs from a Suno profile
+- Queue Spotify tracks, albums, and playlists by matching them on YouTube
 - Basic queue controls (`play`, `queue`, `now`, `skip`, `stop`)
 - Automatic next-track playback
-- Uses `yt-dlp` for resolving Suno links
+- Uses `yt-dlp` for YouTube playback and Spotify matching
 
 ## Requirements
 
@@ -48,6 +49,7 @@ SUNO_DEFAULT_PROFILE_TRACKS=25
 SUNO_MAX_PROFILE_TRACKS=500
 MAX_CONSECUTIVE_PLAYBACK_FAILURES=3
 YOUTUBE_MAX_PLAYLIST_TRACKS=100
+SPOTIFY_MAX_TRACKS=100
 ```
 
 4. Run the bot:
@@ -64,7 +66,7 @@ npm run check:runtime
 
 ## Commands
 
-- `!play <suno-or-youtube-url>`: Add a Suno song/playlist or YouTube video/playlist URL to queue
+- `!play <url>`: Add a Suno song/playlist, YouTube video/playlist, or Spotify track/album/playlist URL to queue
 - `!profile <@handle|profile-url> [count|all] [top|recent]`: Queue public songs from a Suno profile
 - `!queue`: Show current queue
 - `!now`: Show currently playing track
@@ -74,7 +76,8 @@ npm run check:runtime
 
 ## Notes
 
-- `!play` accepts Suno and YouTube URLs. `!profile` accepts Suno profile handles or profile URLs.
+- `!play` accepts Suno, YouTube, and Spotify URLs. `!profile` accepts Suno profile handles or profile URLs.
+- Spotify links are metadata-only; the bot searches YouTube for the closest playable match. Spotify collections are capped at the first 100 tracks.
 - If YouTube playback fails after install, run `npm install` again and check that Python 3.7+ is available as `python3`.
 - Depending on Suno or extractor changes, `yt-dlp` support may need updates.
 

@@ -11,7 +11,9 @@ const SUNO_DEFAULT_PROFILE_TRACKS = Math.max(1, Number(process.env.SUNO_DEFAULT_
 const SUNO_MAX_PROFILE_TRACKS = Math.max(1, Number(process.env.SUNO_MAX_PROFILE_TRACKS) || 500);
 const YOUTUBE_MAX_PLAYLIST_TRACKS = Math.max(1, Number(process.env.YOUTUBE_MAX_PLAYLIST_TRACKS) || 100);
 const YOUTUBE_VIDEO_ID_RE = /^[a-zA-Z0-9_-]{11}$/;
+const SPOTIFY_MAX_TRACKS = Math.min(100, Math.max(1, Number(process.env.SPOTIFY_MAX_TRACKS) || 100));
 let ytDlpCommand = null;
+let spotifyClient = null;
 
 function trimForLog(value, maxLength = 500) {
   if (!value) {
@@ -141,6 +143,19 @@ function isYouTubeUrl(input) {
   }
 }
 
+function isSpotifyUrl(input) {
+  try {
+    const parsed = new URL(input);
+    const host = parsed.hostname.toLowerCase();
+    return (
+      host === "open.spotify.com" ||
+      host === "play.spotify.com"
+    );
+  } catch {
+    return false;
+  }
+}
+
 function isValidUrl(input) {
   try {
     const parsed = new URL(input);
@@ -210,6 +225,65 @@ function parseJsonResponse(body, context) {
     });
     throw new Error(`Could not parse ${context} response.`);
   }
+}
+
+function getSpotifyClient() {
+  if (spotifyClient) return spotifyClient;
+  spotifyClient = require("spotify-url-info")(fetch);
+  return spotifyClient;
+}
+
+function buildSpotifySearchQuery(track) {
+  const parts = [track.artist, track.name].filter(Boolean);
+  return `${parts.join(" ")} official audio`;
+}
+
+function spotifyTrackToQueueTrack(track, index) {
+  if (!track?.name) return null;
+  const query = buildSpotifySearchQuery(track);
+  if (!query.trim()) return null;
+
+  return {
+    title: track.artist ? `${track.artist} - ${track.name}` : track.name,
+    sourceUrl: `ytsearch1:${query}`,
+    sourceLabel: "Spotify",
+    spotifyUri: track.uri,
+    durationMs: track.duration,
+    requestedFrom: "spotify",
+    index,
+  };
+}
+
+async function extractSpotifyTracks(url) {
+  logger.info("Fetching Spotify metadata", {
+    url,
+    maxTracks: SPOTIFY_MAX_TRACKS,
+  });
+
+  const spotify = getSpotifyClient();
+  const { preview, tracks: rawTracks } = await spotify.getDetails(url, {
+    headers: { "user-agent": "Mozilla/5.0" },
+  });
+
+  const tracks = (Array.isArray(rawTracks) ? rawTracks : [])
+    .slice(0, SPOTIFY_MAX_TRACKS)
+    .map((track, index) => spotifyTrackToQueueTrack(track, index))
+    .filter(Boolean);
+
+  logger.info("Extracted Spotify tracks", {
+    url,
+    type: preview?.type,
+    title: preview?.title,
+    rawCount: Array.isArray(rawTracks) ? rawTracks.length : 0,
+    count: tracks.length,
+    cappedAt: SPOTIFY_MAX_TRACKS,
+  });
+
+  if (tracks.length === 0) {
+    throw new Error("Could not find any playable tracks in that Spotify link.");
+  }
+
+  return tracks;
 }
 
 // Resolve a Suno short URL (/s/<id>) to a full song UUID by following the redirect.
@@ -488,6 +562,10 @@ async function fetchSunoProfileTracks(input, options = {}) {
 async function extractTracksFromUrl(url) {
   logger.info("Extracting tracks from URL", { url });
 
+  if (isSpotifyUrl(url)) {
+    return extractSpotifyTracks(url);
+  }
+
   // Suno playlists need the studio API — yt-dlp only gets the first track as silence
   if (isSunoUrl(url) && SUNO_PLAYLIST_UUID_RE.test(url)) {
     const tracks = await extractSunoPlaylist(url);
@@ -662,9 +740,11 @@ async function fetchRadioSongTracks(songUrl, count = 10) {
 module.exports = {
   isSunoUrl,
   isYouTubeUrl,
+  isSpotifyUrl,
   isValidUrl,
   isSunoProfileInput,
   extractTracksFromUrl,
+  extractSpotifyTracks,
   fetchSunoProfileTracks,
   resolveStreamUrl,
   fetchRadioTracks,

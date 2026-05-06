@@ -9,6 +9,7 @@ const { MusicManager } = require("./musicManager");
 const {
   isSunoUrl,
   isYouTubeUrl,
+  isSpotifyUrl,
   isValidUrl,
   isSunoProfileInput,
   extractTracksFromUrl,
@@ -101,7 +102,7 @@ function parseProfileRequest(args) {
 }
 
 function isSupportedPlayUrl(input) {
-  return isSunoUrl(input) || isYouTubeUrl(input);
+  return isSunoUrl(input) || isYouTubeUrl(input) || isSpotifyUrl(input);
 }
 
 client.once("clientReady", () => {
@@ -166,12 +167,12 @@ client.on("messageCreate", async (message) => {
     if (command === "play" || command === "playlist") {
       const input = args[0];
       if (!input) {
-        await message.reply(`Usage: ${prefix}play <url>  — works with Suno songs/playlists and YouTube videos/playlists`);
+        await message.reply(`Usage: ${prefix}play <url>  — works with Suno, YouTube, and Spotify links`);
         return;
       }
 
       if (!isValidUrl(input) || !isSupportedPlayUrl(input)) {
-        await message.reply("Please provide a Suno or YouTube URL.");
+        await message.reply("Please provide a Suno, YouTube, or Spotify URL.");
         return;
       }
 
@@ -292,7 +293,7 @@ client.on("messageCreate", async (message) => {
       }
 
       if (!isValidUrl(input) || !isSupportedPlayUrl(input)) {
-        await message.reply("Please provide a Suno or YouTube URL.");
+        await message.reply("Please provide a Suno, YouTube, or Spotify URL.");
         return;
       }
 
@@ -384,7 +385,7 @@ client.on("messageCreate", async (message) => {
       await message.reply(
         [
           "```",
-          `${prefix}play <url>     — play a song or playlist (Suno or YouTube)`,
+          `${prefix}play <url>     — play a song or playlist (Suno, YouTube, or Spotify)`,
           `${prefix}playlist <url> — alias for ${prefix}play`,
           `${prefix}profile <@handle|url> [count|all] [top|recent] — queue public Suno profile songs`,
           `${prefix}next <url>     — force a song to play next in queue`,
