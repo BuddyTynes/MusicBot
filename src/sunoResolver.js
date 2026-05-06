@@ -1,4 +1,5 @@
 const { spawn } = require("node:child_process");
+const fs = require("node:fs");
 const https = require("node:https");
 const logger = require("./logger");
 
@@ -10,6 +11,7 @@ const SUNO_DEFAULT_PROFILE_TRACKS = Math.max(1, Number(process.env.SUNO_DEFAULT_
 const SUNO_MAX_PROFILE_TRACKS = Math.max(1, Number(process.env.SUNO_MAX_PROFILE_TRACKS) || 500);
 const YOUTUBE_MAX_PLAYLIST_TRACKS = Math.max(1, Number(process.env.YOUTUBE_MAX_PLAYLIST_TRACKS) || 100);
 const YOUTUBE_VIDEO_ID_RE = /^[a-zA-Z0-9_-]{11}$/;
+let ytDlpCommand = null;
 
 function trimForLog(value, maxLength = 500) {
   if (!value) {
@@ -21,10 +23,35 @@ function trimForLog(value, maxLength = 500) {
   return `${value.slice(0, maxLength)}...<truncated>`;
 }
 
+function resolveYtDlpCommand() {
+  if (ytDlpCommand) return ytDlpCommand;
+
+  if (process.env.YT_DLP_PATH) {
+    ytDlpCommand = process.env.YT_DLP_PATH;
+    return ytDlpCommand;
+  }
+
+  try {
+    const { constants } = require("youtube-dl-exec");
+    if (constants?.YOUTUBE_DL_PATH && fs.existsSync(constants.YOUTUBE_DL_PATH)) {
+      ytDlpCommand = constants.YOUTUBE_DL_PATH;
+      return ytDlpCommand;
+    }
+  } catch (error) {
+    logger.debug("Bundled yt-dlp lookup failed", {
+      error: logger.serializeError(error),
+    });
+  }
+
+  ytDlpCommand = "yt-dlp";
+  return ytDlpCommand;
+}
+
 function runYtDlp(args) {
   return new Promise((resolve, reject) => {
-    logger.info("Running yt-dlp", { args });
-    const child = spawn("yt-dlp", args, { windowsHide: true });
+    const command = resolveYtDlpCommand();
+    logger.info("Running yt-dlp", { command, args });
+    const child = spawn(command, args, { windowsHide: true });
     let stdout = "";
     let stderr = "";
     let timedOut = false;
@@ -50,7 +77,7 @@ function runYtDlp(args) {
       });
       reject(
         new Error(
-          `Failed to execute yt-dlp. Make sure it is installed and on PATH. ${error.message}`,
+          `Failed to execute yt-dlp. Run npm install to fetch the bundled binary, or set YT_DLP_PATH. ${error.message}`,
         ),
       );
     });

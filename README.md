@@ -13,9 +13,10 @@ A Discord bot that accepts Suno song links and playlist links, queues them, and 
 ## Requirements
 
 - Node.js 20+
-- `ffmpeg` installed and available in PATH
-- `yt-dlp` installed and available in PATH
+- Python 3.7+ available as `python3` during `npm install` on Linux
 - A Discord bot token
+
+FFmpeg and yt-dlp are installed as project dependencies. If you need a custom yt-dlp binary, set `YT_DLP_PATH` in `.env`.
 
 ## Setup
 
@@ -28,8 +29,10 @@ npm install
 2. Create `.env` from example and set your token:
 
 ```bash
-copy .env.example .env
+cp .env.example .env
 ```
+
+On Windows, use `copy .env.example .env`.
 
 3. Fill in `.env`:
 
@@ -38,6 +41,8 @@ DISCORD_TOKEN=your_bot_token_here
 COMMAND_PREFIX=!
 LOG_LEVEL=info
 YT_DLP_TIMEOUT_MS=45000
+# Optional: override the bundled yt-dlp binary path.
+YT_DLP_PATH=
 SUNO_MAX_PLAYLIST_TRACKS=1000
 SUNO_DEFAULT_PROFILE_TRACKS=25
 SUNO_MAX_PROFILE_TRACKS=500
@@ -49,6 +54,12 @@ YOUTUBE_MAX_PLAYLIST_TRACKS=100
 
 ```bash
 npm start
+```
+
+Optional runtime check before starting:
+
+```bash
+npm run check:runtime
 ```
 
 ## Commands
@@ -63,8 +74,8 @@ npm start
 
 ## Notes
 
-- The bot expects Suno URLs (`suno.com`).
-- If playback fails, ensure `ffmpeg` and `yt-dlp` both work from your terminal.
+- `!play` accepts Suno and YouTube URLs. `!profile` accepts Suno profile handles or profile URLs.
+- If YouTube playback fails after install, run `npm install` again and check that Python 3.7+ is available as `python3`.
 - Depending on Suno or extractor changes, `yt-dlp` support may need updates.
 
 ## Debug Logging
