@@ -6,7 +6,7 @@ const {
   PermissionsBitField,
 } = require("discord.js");
 const { MusicManager } = require("./musicManager");
-const { isSunoUrl, extractTracksFromUrl } = require("./sunoResolver");
+const { isSunoUrl, isValidUrl, extractTracksFromUrl, fetchRadioTracks, fetchRadioSongTracks } = require("./sunoResolver");
 const logger = require("./logger");
 
 const token = process.env.DISCORD_TOKEN;
@@ -127,15 +127,15 @@ client.on("messageCreate", async (message) => {
   });
 
   try {
-    if (command === "play") {
+    if (command === "play" || command === "playlist") {
       const input = args[0];
       if (!input) {
-        await message.reply(`Usage: ${prefix}play <suno-song-or-playlist-url>`);
+        await message.reply(`Usage: ${prefix}play <url>  — works with Suno songs/playlists and YouTube videos/playlists`);
         return;
       }
 
-      if (!isSunoUrl(input)) {
-        await message.reply("Please provide a valid suno.com link.");
+      if (!isSunoUrl(input) && !isValidUrl(input)) {
+        await message.reply("Please provide a valid URL.");
         return;
       }
 
@@ -204,15 +204,118 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
+    if (command === "next") {
+      const input = args[0];
+      if (!input) {
+        await message.reply(`Usage: ${prefix}next <url>  — force a song to play next in queue`);
+        return;
+      }
+
+      if (!isSunoUrl(input) && !isValidUrl(input)) {
+        await message.reply("Please provide a valid URL.");
+        return;
+      }
+
+      const memberVoice = message.member.voice.channel;
+      if (!memberVoice) {
+        await message.reply("Join a voice channel first.");
+        return;
+      }
+
+      await message.reply("Reading link with yt-dlp...");
+      const tracks = await extractTracksFromUrl(input);
+
+      if (tracks.length === 0) {
+        await message.reply("Could not resolve any tracks from that URL.");
+        return;
+      }
+
+      const track = tracks[0];
+      music.playNextTrack(message.guild.id, track);
+      await message.reply(`**${track.title}** will play next.`);
+      return;
+    }
+
+    if (command === "shuffle") {
+      const info = music.getQueueInfo(message.guild.id);
+      if (info.upcoming.length === 0) {
+        await message.reply("Nothing in the queue to shuffle.");
+        return;
+      }
+      music.shuffle(message.guild.id);
+      await message.reply(`Shuffled ${info.upcoming.length} track(s).`);
+      return;
+    }
+
+    if (command === "radio") {
+      const memberVoice = message.member.voice.channel;
+      if (!memberVoice) {
+        await message.reply("Join a voice channel first.");
+        return;
+      }
+
+      const me = message.guild.members.me;
+      const permissions = memberVoice.permissionsFor(me);
+      if (!permissions?.has(PermissionsBitField.Flags.Connect) || !permissions?.has(PermissionsBitField.Flags.Speak)) {
+        await message.reply("I need Connect and Speak permissions in your voice channel.");
+        return;
+      }
+
+      await message.reply("Fetching 10 random trending Suno tracks...");
+      const tracks = await fetchRadioTracks(10);
+      await music.ensureConnection(message.guild, memberVoice, message.channelId);
+      await music.enqueue(message.guild.id, tracks);
+      await message.reply(`Queued ${tracks.length} tracks:\n${tracks.map((t, i) => `${i + 1}. ${t.title}`).join("\n")}`);
+      return;
+    }
+
+    if (command === "radio-song") {
+      const input = args[0];
+      if (!input || !isSunoUrl(input)) {
+        await message.reply(`Usage: ${prefix}radio-song <suno-song-url>`);
+        return;
+      }
+
+      const memberVoice = message.member.voice.channel;
+      if (!memberVoice) {
+        await message.reply("Join a voice channel first.");
+        return;
+      }
+
+      const me = message.guild.members.me;
+      const permissions = memberVoice.permissionsFor(me);
+      if (!permissions?.has(PermissionsBitField.Flags.Connect) || !permissions?.has(PermissionsBitField.Flags.Speak)) {
+        await message.reply("I need Connect and Speak permissions in your voice channel.");
+        return;
+      }
+
+      await message.reply("Finding similar tracks...");
+      const { tracks, seedTitle, seedTags } = await fetchRadioSongTracks(input, 10);
+      const tagNote = seedTags.length > 0 ? ` (matched on: ${seedTags.slice(0, 3).join(", ")})` : " (no tags — using random trending)";
+      await music.ensureConnection(message.guild, memberVoice, message.channelId);
+      await music.enqueue(message.guild.id, tracks);
+      await message.reply(
+        `Radio based on **${seedTitle}**${tagNote}:\n${tracks.map((t, i) => `${i + 1}. ${t.title}`).join("\n")}`
+      );
+      return;
+    }
+
     if (command === "help") {
       await message.reply(
         [
-          `Commands (${prefix}):`,
-          `${prefix}play <url> - add Suno song or playlist`,
-          `${prefix}queue - show queue`,
-          `${prefix}now - show current track`,
-          `${prefix}skip - skip current track`,
-          `${prefix}stop - stop and clear queue`,
+          "```",
+          `${prefix}play <url>     — play a song or playlist (Suno or YouTube)`,
+          `${prefix}playlist <url> — alias for ${prefix}play`,
+          `${prefix}next <url>     — force a song to play next in queue`,
+          `${prefix}radio          — queue 10 random trending Suno songs`,
+          `${prefix}radio-song <url> — queue 10 songs similar to a Suno song`,
+          `${prefix}shuffle        — shuffle the current queue`,
+          `${prefix}queue          — show the current queue`,
+          `${prefix}now            — show the currently playing track`,
+          `${prefix}skip           — skip to the next track`,
+          `${prefix}stop           — stop playback and clear the queue`,
+          `${prefix}help           — show this message`,
+          "```",
         ].join("\n"),
       );
     }

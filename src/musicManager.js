@@ -137,12 +137,30 @@ class MusicManager {
       voiceChannelId: voiceChannel.id,
     });
 
-    connection.on(VoiceConnectionStatus.Disconnected, () => {
-      logger.warn("Voice connection disconnected", {
+    connection.on(VoiceConnectionStatus.Disconnected, async () => {
+      logger.warn("Voice connection disconnected — attempting reconnect", {
         guildId: guild.id,
         voiceChannelId: voiceChannel.id,
       });
-      this.stop(guild.id, false);
+      try {
+        // Discord may have sent us to a new server (VOICE_SERVER_UPDATE) — wait briefly for it to recover
+        await Promise.race([
+          entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
+          entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+        ]);
+        // Now wait for it to become ready again
+        await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
+        logger.info("Voice connection recovered", {
+          guildId: guild.id,
+          voiceChannelId: voiceChannel.id,
+        });
+      } catch {
+        logger.warn("Voice connection could not recover — stopping", {
+          guildId: guild.id,
+          voiceChannelId: voiceChannel.id,
+        });
+        this.stop(guild.id, true);
+      }
     });
   }
 
@@ -195,15 +213,19 @@ class MusicManager {
           "-analyzeduration",
           "0",
           "-loglevel",
-          "0",
+          "warning",
           "-f",
           "s16le",
           "-ar",
           "48000",
           "-ac",
           "2",
-          "pipe:1",
         ],
+      });
+
+      ffmpeg.process.stderr.on("data", (d) => {
+        const msg = d.toString().trim();
+        if (msg) logger.warn("FFmpeg stderr", { guildId, msg });
       });
 
       const resource = createAudioResource(ffmpeg, {
@@ -229,6 +251,26 @@ class MusicManager {
       await this.notify(guildId, `Reason: ${error.message}`);
       await this.playNext(guildId);
     }
+  }
+
+  playNextTrack(guildId, track) {
+    const state = this.getState(guildId);
+    state.queue.unshift(track);
+    logger.info("Track moved to front of queue", {
+      guildId,
+      title: track.title,
+      queueLength: state.queue.length,
+    });
+  }
+
+  shuffle(guildId) {
+    const state = this.getState(guildId);
+    const q = state.queue;
+    for (let i = q.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [q[i], q[j]] = [q[j], q[i]];
+    }
+    logger.info("Queue shuffled", { guildId, queueLength: q.length });
   }
 
   skip(guildId) {
