@@ -8,6 +8,7 @@ const {
 const { MusicManager } = require("./musicManager");
 const {
   isSunoUrl,
+  isYouTubeUrl,
   isValidUrl,
   isSunoProfileInput,
   extractTracksFromUrl,
@@ -99,6 +100,10 @@ function parseProfileRequest(args) {
   return { input, count, sort };
 }
 
+function isSupportedPlayUrl(input) {
+  return isSunoUrl(input) || isYouTubeUrl(input);
+}
+
 client.once("clientReady", () => {
   logger.info("Bot connected", {
     userTag: client.user.tag,
@@ -165,8 +170,8 @@ client.on("messageCreate", async (message) => {
         return;
       }
 
-      if (!isSunoUrl(input) && !isValidUrl(input)) {
-        await message.reply("Please provide a valid URL.");
+      if (!isValidUrl(input) || !isSupportedPlayUrl(input)) {
+        await message.reply("Please provide a Suno or YouTube URL.");
         return;
       }
 
@@ -286,8 +291,8 @@ client.on("messageCreate", async (message) => {
         return;
       }
 
-      if (!isSunoUrl(input) && !isValidUrl(input)) {
-        await message.reply("Please provide a valid URL.");
+      if (!isValidUrl(input) || !isSupportedPlayUrl(input)) {
+        await message.reply("Please provide a Suno or YouTube URL.");
         return;
       }
 

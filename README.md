@@ -42,6 +42,7 @@ SUNO_MAX_PLAYLIST_TRACKS=1000
 SUNO_DEFAULT_PROFILE_TRACKS=25
 SUNO_MAX_PROFILE_TRACKS=500
 MAX_CONSECUTIVE_PLAYBACK_FAILURES=3
+YOUTUBE_MAX_PLAYLIST_TRACKS=100
 ```
 
 4. Run the bot:
@@ -52,7 +53,7 @@ npm start
 
 ## Commands
 
-- `!play <suno-url>`: Add a Suno song or playlist URL to queue
+- `!play <suno-or-youtube-url>`: Add a Suno song/playlist or YouTube video/playlist URL to queue
 - `!profile <@handle|profile-url> [count|all] [top|recent]`: Queue public songs from a Suno profile
 - `!queue`: Show current queue
 - `!now`: Show currently playing track

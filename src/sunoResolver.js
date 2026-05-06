@@ -8,6 +8,8 @@ const SUNO_PROFILE_PAGE_SIZE = 20;
 const SUNO_MAX_PLAYLIST_TRACKS = Math.max(1, Number(process.env.SUNO_MAX_PLAYLIST_TRACKS) || 1000);
 const SUNO_DEFAULT_PROFILE_TRACKS = Math.max(1, Number(process.env.SUNO_DEFAULT_PROFILE_TRACKS) || 25);
 const SUNO_MAX_PROFILE_TRACKS = Math.max(1, Number(process.env.SUNO_MAX_PROFILE_TRACKS) || 500);
+const YOUTUBE_MAX_PLAYLIST_TRACKS = Math.max(1, Number(process.env.YOUTUBE_MAX_PLAYLIST_TRACKS) || 100);
+const YOUTUBE_VIDEO_ID_RE = /^[a-zA-Z0-9_-]{11}$/;
 
 function trimForLog(value, maxLength = 500) {
   if (!value) {
@@ -89,6 +91,24 @@ function isSunoUrl(input) {
   try {
     const parsed = new URL(input);
     return parsed.hostname.includes("suno.com");
+  } catch {
+    return false;
+  }
+}
+
+function isYouTubeUrl(input) {
+  try {
+    const parsed = new URL(input);
+    const host = parsed.hostname.toLowerCase();
+    return (
+      host === "youtu.be" ||
+      host === "youtube.com" ||
+      host === "www.youtube.com" ||
+      host === "youtube-nocookie.com" ||
+      host === "www.youtube-nocookie.com" ||
+      host === "music.youtube.com" ||
+      host === "m.youtube.com"
+    );
   } catch {
     return false;
   }
@@ -277,11 +297,48 @@ async function extractSunoPlaylist(url) {
 }
 
 function normalizeTrack(entry, fallbackUrl, index) {
-  const sourceUrl = entry.webpage_url || entry.url || fallbackUrl;
+  const sourceUrl = normalizeTrackSourceUrl(entry, fallbackUrl);
+  if (!sourceUrl) return null;
   return {
     title: entry.title || `Track ${index + 1}`,
     sourceUrl,
   };
+}
+
+function isHttpUrl(input) {
+  if (!input) return false;
+  try {
+    const parsed = new URL(input);
+    return parsed.protocol === "https:" || parsed.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+function normalizeTrackSourceUrl(entry, fallbackUrl) {
+  if (isHttpUrl(entry.webpage_url)) return entry.webpage_url;
+  if (isHttpUrl(entry.url)) return entry.url;
+
+  if (isYouTubeUrl(fallbackUrl)) {
+    const videoId = getYouTubeVideoId(entry);
+    if (videoId) {
+      return `https://www.youtube.com/watch?v=${videoId}`;
+    }
+  }
+
+  return isHttpUrl(fallbackUrl) ? fallbackUrl : null;
+}
+
+function getYouTubeVideoId(entry) {
+  if (typeof entry.id === "string" && YOUTUBE_VIDEO_ID_RE.test(entry.id)) {
+    return entry.id;
+  }
+
+  if (typeof entry.url === "string" && YOUTUBE_VIDEO_ID_RE.test(entry.url)) {
+    return entry.url;
+  }
+
+  return null;
 }
 
 function getSunoProfileHandle(input) {
@@ -416,22 +473,40 @@ async function extractTracksFromUrl(url) {
     if (tracks.length > 0) return tracks;
   }
 
-  const output = await runYtDlp([
+  const args = [
     "--dump-single-json",
     "--no-warnings",
     "--flat-playlist",
-    url,
-  ]);
+  ];
+
+  if (isYouTubeUrl(url)) {
+    args.push("--playlist-end", String(YOUTUBE_MAX_PLAYLIST_TRACKS));
+  }
+
+  args.push(url);
+
+  const output = await runYtDlp(args);
 
   const data = JSON.parse(output);
 
   if (Array.isArray(data.entries) && data.entries.length > 0) {
+    const tracks = data.entries
+      .map((entry, index) => normalizeTrack(entry, url, index))
+      .filter(Boolean);
+
     logger.info("Extracted playlist tracks", {
       url,
-      count: data.entries.length,
+      count: tracks.length,
+      rawCount: data.entries.length,
       title: data.title,
+      cappedAt: isYouTubeUrl(url) ? YOUTUBE_MAX_PLAYLIST_TRACKS : null,
     });
-    return data.entries.map((entry, index) => normalizeTrack(entry, url, index));
+
+    if (tracks.length === 0) {
+      throw new Error("Could not resolve any playable tracks from that playlist.");
+    }
+
+    return tracks;
   }
 
   logger.info("Extracted single track", {
@@ -465,6 +540,7 @@ async function resolveStreamUrl(sourceUrl) {
   const output = await runYtDlp([
     "-g",
     "--no-warnings",
+    "--no-playlist",
     "-f",
     "bestaudio/best",
     sourceUrl,
@@ -558,6 +634,7 @@ async function fetchRadioSongTracks(songUrl, count = 10) {
 
 module.exports = {
   isSunoUrl,
+  isYouTubeUrl,
   isValidUrl,
   isSunoProfileInput,
   extractTracksFromUrl,
