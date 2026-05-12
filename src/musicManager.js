@@ -22,6 +22,7 @@ const MAX_CONSECUTIVE_PLAYBACK_FAILURES = readPositiveIntEnv(
   "MAX_CONSECUTIVE_PLAYBACK_FAILURES",
   3,
 );
+const MIN_PLAYBACK_SUCCESS_MS = readPositiveIntEnv("MIN_PLAYBACK_SUCCESS_MS", 3000);
 
 function formatPlaybackError(error) {
   const message = error?.message || "Unknown playback error";
@@ -47,20 +48,32 @@ class MusicManager {
         current: null,
         textChannelId: null,
         consecutivePlaybackFailures: 0,
+        playbackStartedAtMs: null,
+        skipRequested: false,
       });
 
       logger.info("Created guild music state", { guildId });
 
       player.on("stateChange", (oldState, newState) => {
+        const state = this.getState(guildId);
         logger.debug("Audio player state change", {
           guildId,
           from: oldState.status,
           to: newState.status,
+          current: state.current ? state.current.title : null,
         });
-      });
 
-      player.on(AudioPlayerStatus.Idle, async () => {
-        await this.playNext(guildId);
+        if (
+          oldState.status !== AudioPlayerStatus.Idle &&
+          newState.status === AudioPlayerStatus.Idle
+        ) {
+          this.handlePlayerIdle(guildId, oldState).catch((error) => {
+            logger.error("Failed to handle audio player idle", {
+              guildId,
+              error: logger.serializeError(error),
+            });
+          });
+        }
       });
 
       player.on("error", async (error) => {
@@ -74,6 +87,49 @@ class MusicManager {
     }
 
     return this.states.get(guildId);
+  }
+
+  async handlePlayerIdle(guildId, oldState) {
+    const state = this.getState(guildId);
+    const finishedTrack = state.current;
+    const elapsedMs = state.playbackStartedAtMs
+      ? Date.now() - state.playbackStartedAtMs
+      : null;
+    const ffmpegClose = oldState.resource?.metadata?.ffmpegClose || null;
+
+    logger.info("Audio player became idle", {
+      guildId,
+      title: finishedTrack ? finishedTrack.title : null,
+      elapsedMs,
+      skipRequested: state.skipRequested,
+      ffmpegClose,
+      remainingQueue: state.queue.length,
+    });
+
+    if (state.skipRequested) {
+      state.skipRequested = false;
+      state.current = null;
+      state.playbackStartedAtMs = null;
+      await this.playNext(guildId);
+      return;
+    }
+
+    if (
+      finishedTrack &&
+      elapsedMs !== null &&
+      elapsedMs < MIN_PLAYBACK_SUCCESS_MS
+    ) {
+      const reason = ffmpegClose
+        ? `FFmpeg ended after ${elapsedMs}ms (code ${ffmpegClose.code}, signal ${ffmpegClose.signal || "none"}).`
+        : `Playback ended after ${elapsedMs}ms.`;
+      await this.handlePlaybackFailure(guildId, finishedTrack, new Error(reason));
+      return;
+    }
+
+    state.current = null;
+    state.playbackStartedAtMs = null;
+    state.consecutivePlaybackFailures = 0;
+    await this.playNext(guildId);
   }
 
   async ensureConnection(guild, voiceChannel, textChannelId) {
@@ -224,6 +280,14 @@ class MusicManager {
         title: nextTrack.title,
         streamUrl,
       });
+      const resourceMetadata = {
+        guildId,
+        title: nextTrack.title,
+        sourceUrl: nextTrack.sourceUrl,
+        streamUrl,
+        ffmpegClose: null,
+      };
+      let playbackStartedAtMs = null;
       const ffmpeg = new prism.FFmpeg({
         args: [
           "-reconnect",
@@ -256,19 +320,47 @@ class MusicManager {
 
       ffmpeg.process.stderr.on("data", (d) => {
         const msg = d.toString().trim();
-        if (msg) logger.warn("FFmpeg stderr", { guildId, msg });
+        if (msg) logger.warn("FFmpeg stderr", { guildId, title: nextTrack.title, msg });
+      });
+
+      ffmpeg.process.on("error", (error) => {
+        logger.error("FFmpeg process error", {
+          guildId,
+          title: nextTrack.title,
+          error: logger.serializeError(error),
+        });
+      });
+
+      ffmpeg.process.on("close", (code, signal) => {
+        const elapsedMs = playbackStartedAtMs
+          ? Date.now() - playbackStartedAtMs
+          : null;
+        resourceMetadata.ffmpegClose = { code, signal, elapsedMs };
+        const level = elapsedMs !== null && elapsedMs < MIN_PLAYBACK_SUCCESS_MS ? "warn" : "info";
+        logger[level]("FFmpeg process closed", {
+          guildId,
+          title: nextTrack.title,
+          code,
+          signal,
+          elapsedMs,
+        });
       });
 
       const resource = createAudioResource(ffmpeg, {
         inputType: StreamType.Raw,
+        metadata: resourceMetadata,
       });
 
       state.current = nextTrack;
+      playbackStartedAtMs = Date.now();
+      state.playbackStartedAtMs = playbackStartedAtMs;
+      state.skipRequested = false;
       state.consecutivePlaybackFailures = 0;
       state.player.play(resource);
       logger.info("Playback started", {
         guildId,
         title: nextTrack.title,
+        minPlaybackSuccessMs: MIN_PLAYBACK_SUCCESS_MS,
         remainingQueue: state.queue.length,
       });
       await this.notify(guildId, `Now playing: ${nextTrack.title}`);
@@ -291,6 +383,8 @@ class MusicManager {
     const failureCount = previousFailures + 1;
     state.consecutivePlaybackFailures = failureCount;
     state.current = null;
+    state.playbackStartedAtMs = null;
+    state.skipRequested = false;
 
     const title = track?.title || "current track";
     const reason = formatPlaybackError(error);
@@ -350,6 +444,7 @@ class MusicManager {
       guildId,
       current: state.current ? state.current.title : null,
     });
+    state.skipRequested = true;
     state.player.stop();
   }
 
@@ -363,6 +458,8 @@ class MusicManager {
     });
     state.queue = [];
     state.current = null;
+    state.playbackStartedAtMs = null;
+    state.skipRequested = false;
     state.consecutivePlaybackFailures = 0;
     state.player.stop(true);
 

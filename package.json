@@ -6,6 +6,7 @@
   "type": "commonjs",
   "scripts": {
     "check:runtime": "node tools/checkRuntime.js",
+    "check:youtube-cookies": "node tools/checkYoutubeCookies.js",
     "start": "node src/bot.js"
   },
   "engines": {

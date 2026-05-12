@@ -51,6 +51,7 @@ SUNO_MAX_PLAYLIST_TRACKS=1000
 SUNO_DEFAULT_PROFILE_TRACKS=25
 SUNO_MAX_PROFILE_TRACKS=500
 MAX_CONSECUTIVE_PLAYBACK_FAILURES=3
+MIN_PLAYBACK_SUCCESS_MS=3000
 YOUTUBE_MAX_PLAYLIST_TRACKS=100
 SPOTIFY_MAX_TRACKS=100
 ```
@@ -65,6 +66,12 @@ Optional runtime check before starting:
 
 ```bash
 npm run check:runtime
+```
+
+Optional YouTube cookie check:
+
+```bash
+npm run check:youtube-cookies
 ```
 
 ## Commands
@@ -82,6 +89,7 @@ npm run check:runtime
 - `!play` accepts Suno, YouTube, and Spotify URLs. `!profile` accepts Suno profile handles or profile URLs.
 - Spotify links are metadata-only; the bot searches YouTube for the closest playable match. Spotify collections are capped at the first 100 tracks.
 - `MAX_CONSECUTIVE_PLAYBACK_FAILURES` defaults to 3 if it is missing or invalid, so a bad queue should stop instead of spamming every track.
+- `MIN_PLAYBACK_SUCCESS_MS` defaults to 3000. Playback ending faster than that is treated as a failure and logged with FFmpeg exit details.
 - If YouTube says "Sign in to confirm you're not a bot", export cookies from a browser that can play YouTube and save them as `youtube-cookies.txt` in the app directory, beside `package.json`. The file is ignored by git and is passed directly to `yt-dlp`. `YT_DLP_COOKIES_FROM_BROWSER=firefox` can also work on desktop hosts.
 - If YouTube playback fails after install, run `npm install` again and check that Python 3.7+ is available as `python3`.
 - Depending on Suno or extractor changes, `yt-dlp` support may need updates.

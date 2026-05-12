@@ -695,15 +695,33 @@ async function extractTracksFromUrl(url) {
 
 const SUNO_SONG_UUID_RE = /\/song\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
 
+async function fetchSunoClipAudioUrl(songId) {
+  const { status, body } = await httpsGet(`${SUNO_API_BASE}/api/clip/${songId}`);
+  if (status !== 200) {
+    logger.warn("Suno clip API returned non-200", { songId, status });
+    return null;
+  }
+
+  const clip = parseJsonResponse(body, "Suno clip");
+  const audioUrl = clip.audio_url || clip.audioUrl || clip.metadata?.audio_url || clip.metadata?.audioUrl;
+  return isHttpUrl(audioUrl) ? audioUrl : null;
+}
+
 async function resolveStreamUrl(sourceUrl) {
   logger.info("Resolving stream URL", { sourceUrl });
 
-  // Suno CDN URLs follow a predictable pattern: cdn1.suno.ai/<uuid>.mp3
-  // yt-dlp cannot render Suno's JS and returns a silence placeholder instead.
-  // Extract the UUID directly from the song URL when available.
+  // yt-dlp cannot render Suno's JS and can return a silence placeholder instead.
+  // Prefer Suno's clip API when a song UUID is available.
   const sunoMatch = SUNO_SONG_UUID_RE.exec(sourceUrl);
   if (sunoMatch) {
-    const cdnUrl = `https://cdn1.suno.ai/${sunoMatch[1]}.mp3`;
+    const songId = sunoMatch[1];
+    const apiAudioUrl = await fetchSunoClipAudioUrl(songId);
+    if (apiAudioUrl) {
+      logger.info("Resolved Suno audio URL via API", { sourceUrl, audioUrl: apiAudioUrl });
+      return apiAudioUrl;
+    }
+
+    const cdnUrl = `https://cdn1.suno.ai/${songId}.mp3`;
     logger.info("Resolved Suno CDN URL directly", { sourceUrl, cdnUrl });
     return cdnUrl;
   }
