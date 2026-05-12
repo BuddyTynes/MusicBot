@@ -44,6 +44,9 @@ LOG_LEVEL=info
 YT_DLP_TIMEOUT_MS=45000
 # Optional: override the bundled yt-dlp binary path.
 YT_DLP_PATH=
+# Optional: use a browser profile for cookies on desktop hosts.
+# Server deploys should use an uncommitted youtube-cookies.txt file instead.
+YT_DLP_COOKIES_FROM_BROWSER=
 SUNO_MAX_PLAYLIST_TRACKS=1000
 SUNO_DEFAULT_PROFILE_TRACKS=25
 SUNO_MAX_PROFILE_TRACKS=500
@@ -78,10 +81,31 @@ npm run check:runtime
 
 - `!play` accepts Suno, YouTube, and Spotify URLs. `!profile` accepts Suno profile handles or profile URLs.
 - Spotify links are metadata-only; the bot searches YouTube for the closest playable match. Spotify collections are capped at the first 100 tracks.
+- `MAX_CONSECUTIVE_PLAYBACK_FAILURES` defaults to 3 if it is missing or invalid, so a bad queue should stop instead of spamming every track.
+- If YouTube says "Sign in to confirm you're not a bot", export cookies from a browser that can play YouTube and save them as `youtube-cookies.txt` in the app directory, beside `package.json`. The file is ignored by git and is passed directly to `yt-dlp`. `YT_DLP_COOKIES_FROM_BROWSER=firefox` can also work on desktop hosts.
 - If YouTube playback fails after install, run `npm install` again and check that Python 3.7+ is available as `python3`.
 - Depending on Suno or extractor changes, `yt-dlp` support may need updates.
 
 ## Debug Logging
 
 - Set `LOG_LEVEL=debug` in `.env` for verbose connection and playback logs.
-- Start normally with `npm start` and watch terminal output.
+- Logs are written to `src/logs/bot.log` and still appear in the terminal.
+- On the server, run `tail -f src/logs/bot.log` while testing playback.
+
+## Converting Chrome Cookies
+
+If you do not want to use a browser extension, copy rows from Chrome DevTools locally:
+
+1. Open YouTube while logged in.
+2. Open DevTools, then Application > Storage > Cookies > `https://www.youtube.com`.
+3. Select the cookie rows and copy them.
+4. Paste them into a local file named `chrome-cookies.tsv`.
+5. Run:
+
+```bash
+node tools/convertChromeCookies.js chrome-cookies.tsv youtube-cookies.txt
+```
+
+Use the output filename argument instead of shell redirection on Windows PowerShell, because `>` can write UTF-16 files that `yt-dlp` cannot read.
+
+Keep `youtube-cookies.txt` in the app directory beside `package.json`. The bot will use it automatically on the next playback request. Keep both files private; they are ignored by git.

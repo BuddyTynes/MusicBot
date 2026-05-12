@@ -12,10 +12,21 @@ const prism = require("prism-media");
 const { resolveStreamUrl } = require("./sunoResolver");
 const logger = require("./logger");
 
-const MAX_CONSECUTIVE_PLAYBACK_FAILURES = Math.max(
-  1,
-  Number(process.env.MAX_CONSECUTIVE_PLAYBACK_FAILURES) || 3,
+function readPositiveIntEnv(name, fallback) {
+  const parsed = Number(process.env[name]);
+  if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+  return Math.floor(parsed);
+}
+
+const MAX_CONSECUTIVE_PLAYBACK_FAILURES = readPositiveIntEnv(
+  "MAX_CONSECUTIVE_PLAYBACK_FAILURES",
+  3,
 );
+
+function formatPlaybackError(error) {
+  const message = error?.message || "Unknown playback error";
+  return message.length <= 700 ? message : `${message.slice(0, 700)}...`;
+}
 
 class MusicManager {
   constructor(client) {
@@ -274,12 +285,15 @@ class MusicManager {
 
   async handlePlaybackFailure(guildId, track, error) {
     const state = this.getState(guildId);
-    const failureCount = state.consecutivePlaybackFailures + 1;
+    const previousFailures = Number.isFinite(state.consecutivePlaybackFailures)
+      ? state.consecutivePlaybackFailures
+      : 0;
+    const failureCount = previousFailures + 1;
     state.consecutivePlaybackFailures = failureCount;
     state.current = null;
 
     const title = track?.title || "current track";
-    const reason = error?.message || "Unknown playback error";
+    const reason = formatPlaybackError(error);
 
     if (failureCount >= MAX_CONSECUTIVE_PLAYBACK_FAILURES) {
       const skippedCount = state.queue.length;

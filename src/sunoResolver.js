@@ -1,9 +1,12 @@
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const https = require("node:https");
+const path = require("node:path");
 const logger = require("./logger");
 
 const YT_DLP_TIMEOUT_MS = Number(process.env.YT_DLP_TIMEOUT_MS || 45000);
+const YT_DLP_COOKIES_FROM_BROWSER = process.env.YT_DLP_COOKIES_FROM_BROWSER?.trim();
+const YT_DLP_COOKIES_FILE = path.resolve(__dirname, "..", "youtube-cookies.txt");
 const SUNO_API_BASE = "https://studio-api.prod.suno.com";
 const SUNO_PROFILE_PAGE_SIZE = 20;
 const SUNO_MAX_PLAYLIST_TRACKS = Math.max(1, Number(process.env.SUNO_MAX_PLAYLIST_TRACKS) || 1000);
@@ -13,6 +16,7 @@ const YOUTUBE_MAX_PLAYLIST_TRACKS = Math.max(1, Number(process.env.YOUTUBE_MAX_P
 const YOUTUBE_VIDEO_ID_RE = /^[a-zA-Z0-9_-]{11}$/;
 const SPOTIFY_MAX_TRACKS = Math.min(100, Math.max(1, Number(process.env.SPOTIFY_MAX_TRACKS) || 100));
 let ytDlpCommand = null;
+let loggedYtDlpCookiesFile = false;
 let spotifyClient = null;
 
 function trimForLog(value, maxLength = 500) {
@@ -49,11 +53,73 @@ function resolveYtDlpCommand() {
   return ytDlpCommand;
 }
 
+function resolveYtDlpCookiesFile() {
+  if (!fs.existsSync(YT_DLP_COOKIES_FILE)) {
+    return null;
+  }
+
+  validateYtDlpCookiesFile(YT_DLP_COOKIES_FILE);
+
+  if (!loggedYtDlpCookiesFile) {
+    loggedYtDlpCookiesFile = true;
+    logger.info("Using yt-dlp cookies file", { cookieFile: YT_DLP_COOKIES_FILE });
+  }
+
+  return YT_DLP_COOKIES_FILE;
+}
+
+function validateYtDlpCookiesFile(cookieFile) {
+  const bytes = fs.readFileSync(cookieFile);
+  if (bytes.length === 0) {
+    throw new Error("youtube-cookies.txt is empty. Regenerate it from Chrome DevTools cookies.");
+  }
+
+  const hasUtf16Bom =
+    bytes.length >= 2 &&
+    ((bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff));
+  const hasNulByteNearStart = bytes.subarray(0, Math.min(bytes.length, 32)).includes(0);
+
+  if (hasUtf16Bom || hasNulByteNearStart) {
+    throw new Error(
+      "youtube-cookies.txt is not UTF-8. Regenerate it with: node tools/convertChromeCookies.js chrome-cookies.tsv youtube-cookies.txt",
+    );
+  }
+}
+
+function getYtDlpAuthArgs() {
+  const cookieFile = resolveYtDlpCookiesFile();
+  if (cookieFile) {
+    return ["--cookies", cookieFile];
+  }
+  if (YT_DLP_COOKIES_FROM_BROWSER) {
+    return ["--cookies-from-browser", YT_DLP_COOKIES_FROM_BROWSER];
+  }
+  return [];
+}
+
+function formatYtDlpError(stderr, code) {
+  const text = stderr.trim();
+  if (/sign in to confirm you're not a bot/i.test(text)) {
+    return [
+      "YouTube is requiring sign-in/bot verification.",
+      "Put an exported Netscape cookies file at youtube-cookies.txt in the app directory,",
+      "or set YT_DLP_COOKIES_FROM_BROWSER on a desktop host.",
+    ].join(" ");
+  }
+
+  const firstErrorLine = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line && !line.startsWith("["));
+  return trimForLog(firstErrorLine || text || `yt-dlp exited with code ${code}`, 700);
+}
+
 function runYtDlp(args) {
   return new Promise((resolve, reject) => {
     const command = resolveYtDlpCommand();
-    logger.info("Running yt-dlp", { command, args });
-    const child = spawn(command, args, { windowsHide: true });
+    const finalArgs = [...getYtDlpAuthArgs(), ...args];
+    logger.info("Running yt-dlp", { command, args: finalArgs });
+    const child = spawn(command, finalArgs, { windowsHide: true });
     let stdout = "";
     let stderr = "";
     let timedOut = false;
@@ -74,7 +140,7 @@ function runYtDlp(args) {
     child.on("error", (error) => {
       clearTimeout(timeoutHandle);
       logger.error("Failed to start yt-dlp", {
-        args,
+        args: finalArgs,
         error: logger.serializeError(error),
       });
       reject(
@@ -88,7 +154,7 @@ function runYtDlp(args) {
       clearTimeout(timeoutHandle);
       if (timedOut) {
         logger.error("yt-dlp timed out", {
-          args,
+          args: finalArgs,
           timeoutMs: YT_DLP_TIMEOUT_MS,
           stderr: trimForLog(stderr),
         });
@@ -98,16 +164,16 @@ function runYtDlp(args) {
 
       if (code !== 0) {
         logger.error("yt-dlp exited with non-zero code", {
-          args,
+          args: finalArgs,
           code,
           stderr: trimForLog(stderr),
         });
-        reject(new Error(stderr.trim() || `yt-dlp exited with code ${code}`));
+        reject(new Error(formatYtDlpError(stderr, code)));
         return;
       }
 
       logger.info("yt-dlp completed", {
-        args,
+        args: finalArgs,
         code,
         stdoutPreview: trimForLog(stdout),
       });

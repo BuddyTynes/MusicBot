@@ -4,3 +4,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+src/logs/
+ssh keys/
+chrome-cookies*.tsv
+youtube-cookies*.txt
