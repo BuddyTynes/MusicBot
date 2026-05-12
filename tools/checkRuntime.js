@@ -1,6 +1,19 @@
 const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 
+function commandExists(command) {
+  const result = spawnSync(command, ["-version"], {
+    encoding: "utf8",
+    timeout: 15_000,
+    windowsHide: true,
+  });
+  return {
+    exists: result.status === 0,
+    output: [result.stdout, result.stderr].filter(Boolean).join("\n").trim(),
+    error: result.error?.message,
+  };
+}
+
 function run(command, args) {
   const result = spawnSync(command, args, {
     encoding: "utf8",
@@ -28,7 +41,30 @@ function report(name, ok, details) {
   console.log(`${status} ${name}${details ? ` - ${details}` : ""}`);
 }
 
+function reportOptional(name, ok, details) {
+  const status = ok ? "OK" : "WARN";
+  console.log(`${status} ${name}${details ? ` - ${details}` : ""}`);
+}
+
 console.log(`Node ${process.version}`);
+
+if (process.env.FFMPEG_PATH) {
+  const result = run(process.env.FFMPEG_PATH, ["-version"]);
+  report(
+    "FFMPEG_PATH",
+    result.ok,
+    result.ok ? firstLine(result.output) : result.error || firstLine(result.output),
+  );
+}
+
+{
+  const result = commandExists("ffmpeg");
+  reportOptional(
+    "system ffmpeg",
+    result.exists,
+    result.exists ? firstLine(result.output) : result.error || "not found in PATH",
+  );
+}
 
 try {
   const ffmpegPath = require("ffmpeg-static");

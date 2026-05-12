@@ -18,6 +18,7 @@ A Discord bot that accepts Suno song links and playlist links, queues them, and 
 - A Discord bot token
 
 FFmpeg and yt-dlp are installed as project dependencies. If you need a custom yt-dlp binary, set `YT_DLP_PATH` in `.env`.
+On Linux servers, installing system FFmpeg and setting `FFMPEG_PATH=/usr/bin/ffmpeg` can avoid crashes from the bundled static binary.
 
 ## Setup
 
@@ -44,6 +45,8 @@ LOG_LEVEL=info
 YT_DLP_TIMEOUT_MS=45000
 # Optional: override the bundled yt-dlp binary path.
 YT_DLP_PATH=
+# Optional: override FFmpeg. On Linux servers, /usr/bin/ffmpeg is often more stable than ffmpeg-static.
+FFMPEG_PATH=
 # Optional: use a browser profile for cookies on desktop hosts.
 # Server deploys should use an uncommitted youtube-cookies.txt file instead.
 YT_DLP_COOKIES_FROM_BROWSER=
@@ -90,6 +93,7 @@ npm run check:youtube-cookies
 - Spotify links are metadata-only; the bot searches YouTube for the closest playable match. Spotify collections are capped at the first 100 tracks.
 - `MAX_CONSECUTIVE_PLAYBACK_FAILURES` defaults to 3 if it is missing or invalid, so a bad queue should stop instead of spamming every track.
 - `MIN_PLAYBACK_SUCCESS_MS` defaults to 3000. Playback ending faster than that is treated as a failure and logged with FFmpeg exit details.
+- If FFmpeg exits with `SIGSEGV` on a Linux server, install system FFmpeg and set `FFMPEG_PATH=/usr/bin/ffmpeg`.
 - If YouTube says "Sign in to confirm you're not a bot", export cookies from a browser that can play YouTube and save them as `youtube-cookies.txt` in the app directory, beside `package.json`. The file is ignored by git and is passed directly to `yt-dlp`. `YT_DLP_COOKIES_FROM_BROWSER=firefox` can also work on desktop hosts.
 - If YouTube playback fails after install, run `npm install` again and check that Python 3.7+ is available as `python3`.
 - Depending on Suno or extractor changes, `yt-dlp` support may need updates.

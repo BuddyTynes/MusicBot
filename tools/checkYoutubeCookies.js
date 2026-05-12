@@ -5,6 +5,20 @@ const path = require("node:path");
 const DEFAULT_TEST_URL = "https://www.youtube.com/watch?v=1KdQvhlINIk";
 const COOKIE_FILE = path.resolve(__dirname, "..", "youtube-cookies.txt");
 const YT_DLP_TIMEOUT_MS = Number(process.env.YT_DLP_TIMEOUT_MS || 45000);
+const LIKELY_AUTH_COOKIE_NAMES = new Set([
+  "SID",
+  "HSID",
+  "SSID",
+  "APISID",
+  "SAPISID",
+  "__Secure-1PSID",
+  "__Secure-3PSID",
+  "__Secure-1PAPISID",
+  "__Secure-3PAPISID",
+  "__Secure-1PSIDTS",
+  "__Secure-3PSIDTS",
+  "LOGIN_INFO",
+]);
 
 function resolveYtDlpCommand() {
   if (process.env.YT_DLP_PATH) {
@@ -41,9 +55,55 @@ function validateUtf8CookieFile(cookieFile) {
   }
 }
 
+function parseCookieFile(cookieFile) {
+  const rows = fs
+    .readFileSync(cookieFile, "utf8")
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line) => line && (!line.startsWith("#") || line.startsWith("#HttpOnly_")))
+    .map((line) => line.split("\t"))
+    .filter((parts) => parts.length >= 7)
+    .map((parts) => ({
+      domain: parts[0].replace(/^#HttpOnly_/, ""),
+      secure: parts[3] === "TRUE",
+      expires: parts[4],
+      name: parts[5],
+    }));
+
+  return rows;
+}
+
+function summarizeCookieFile(cookieFile) {
+  const rows = parseCookieFile(cookieFile);
+  const domains = [...new Set(rows.map((row) => row.domain))].sort();
+  const presentAuthNames = [...new Set(
+    rows
+      .map((row) => row.name)
+      .filter((name) => LIKELY_AUTH_COOKIE_NAMES.has(name)),
+  )].sort();
+  const hasSidLike = presentAuthNames.some((name) => name === "SID" || name.endsWith("PSID"));
+  const hasApisidLike = presentAuthNames.some((name) => name === "SAPISID" || name.endsWith("PAPISID"));
+  const hasSecureAuth = presentAuthNames.some((name) => name.startsWith("__Secure-"));
+
+  console.log(`cookie rows: ${rows.length}`);
+  console.log(`cookie domains: ${domains.length ? domains.join(", ") : "none"}`);
+  console.log(`likely auth cookie names present: ${presentAuthNames.length ? presentAuthNames.join(", ") : "none"}`);
+
+  if (rows.length < 20) {
+    console.log("WARN: cookie file has fewer than 20 rows; incomplete manual copies often fail YouTube bot checks.");
+  }
+  if (!hasSidLike || !hasApisidLike) {
+    console.log("WARN: cookie file appears to be missing SID/SAPISID-style Google auth cookies.");
+  }
+  if (!hasSecureAuth) {
+    console.log("WARN: cookie file has no __Secure-* auth cookies; YouTube may reject this session.");
+  }
+}
+
 function getCookieArgs() {
   if (fs.existsSync(COOKIE_FILE)) {
     validateUtf8CookieFile(COOKIE_FILE);
+    summarizeCookieFile(COOKIE_FILE);
     return {
       source: COOKIE_FILE,
       args: ["--cookies", COOKIE_FILE],
@@ -65,6 +125,17 @@ function trim(value, maxLength = 1200) {
     return value || "";
   }
   return `${value.slice(0, maxLength)}...<truncated>`;
+}
+
+function explainCookieRejection(errorMessage) {
+  if (!/sign in to confirm|use --cookies/i.test(errorMessage)) {
+    return;
+  }
+
+  console.log("");
+  console.log("Cookie file was passed to yt-dlp, but YouTube did not accept it as an authenticated session.");
+  console.log("Regenerate youtube-cookies.txt from a browser session that is logged into YouTube and can play the same video.");
+  console.log("Make sure the export includes all YouTube/Google auth rows, not only LOGIN_INFO.");
 }
 
 async function main() {
@@ -128,5 +199,6 @@ async function main() {
 
 main().catch((error) => {
   console.error(`FAILED: ${error.message}`);
+  explainCookieRejection(error.message);
   process.exit(1);
 });

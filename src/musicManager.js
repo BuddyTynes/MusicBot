@@ -8,7 +8,8 @@ const {
   entersState,
   StreamType,
 } = require("@discordjs/voice");
-const prism = require("prism-media");
+const { spawn, spawnSync } = require("node:child_process");
+const fs = require("node:fs");
 const { resolveStreamUrl } = require("./sunoResolver");
 const logger = require("./logger");
 
@@ -23,6 +24,39 @@ const MAX_CONSECUTIVE_PLAYBACK_FAILURES = readPositiveIntEnv(
   3,
 );
 const MIN_PLAYBACK_SUCCESS_MS = readPositiveIntEnv("MIN_PLAYBACK_SUCCESS_MS", 3000);
+let ffmpegCommand = null;
+
+function canRunFfmpeg(command) {
+  const result = spawnSync(command, ["-version"], {
+    encoding: "utf8",
+    timeout: 5000,
+    windowsHide: true,
+  });
+  return result.status === 0;
+}
+
+function resolveFfmpegCommand() {
+  if (ffmpegCommand) return ffmpegCommand;
+
+  if (process.env.FFMPEG_PATH?.trim()) {
+    ffmpegCommand = process.env.FFMPEG_PATH.trim();
+    return ffmpegCommand;
+  }
+
+  if (canRunFfmpeg("ffmpeg")) {
+    ffmpegCommand = "ffmpeg";
+    return ffmpegCommand;
+  }
+
+  const ffmpegStatic = require("ffmpeg-static");
+  if (ffmpegStatic && fs.existsSync(ffmpegStatic)) {
+    ffmpegCommand = ffmpegStatic;
+    return ffmpegCommand;
+  }
+
+  ffmpegCommand = "ffmpeg";
+  return ffmpegCommand;
+}
 
 function formatPlaybackError(error) {
   const message = error?.message || "Unknown playback error";
@@ -288,42 +322,53 @@ class MusicManager {
         ffmpegClose: null,
       };
       let playbackStartedAtMs = null;
-      const ffmpeg = new prism.FFmpeg({
-        args: [
-          "-reconnect",
-          "1",
-          "-reconnect_streamed",
-          "1",
-          "-reconnect_delay_max",
-          "5",
-          "-fflags",
-          "+genpts",
-          "-probesize",
-          "32M",
-          "-analyzeduration",
-          "10M",
-          "-i",
-          streamUrl,
-          "-vn",
-          "-loglevel",
-          "warning",
-          "-af",
-          "aresample=async=1:first_pts=0",
-          "-f",
-          "s16le",
-          "-ar",
-          "48000",
-          "-ac",
-          "2",
-        ],
+      const ffmpegArgs = [
+        "-reconnect",
+        "1",
+        "-reconnect_streamed",
+        "1",
+        "-reconnect_delay_max",
+        "5",
+        "-fflags",
+        "+genpts",
+        "-probesize",
+        "32M",
+        "-analyzeduration",
+        "10M",
+        "-i",
+        streamUrl,
+        "-vn",
+        "-loglevel",
+        "warning",
+        "-af",
+        "aresample=async=1:first_pts=0",
+        "-f",
+        "s16le",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        "pipe:1",
+      ];
+      const ffmpegCommand = resolveFfmpegCommand();
+      const ffmpeg = spawn(ffmpegCommand, ffmpegArgs, {
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
       });
 
-      ffmpeg.process.stderr.on("data", (d) => {
+      logger.info("Starting FFmpeg", {
+        guildId,
+        title: nextTrack.title,
+        command: ffmpegCommand,
+        args: ffmpegArgs,
+      });
+
+      ffmpeg.stderr.on("data", (d) => {
         const msg = d.toString().trim();
         if (msg) logger.warn("FFmpeg stderr", { guildId, title: nextTrack.title, msg });
       });
 
-      ffmpeg.process.on("error", (error) => {
+      ffmpeg.on("error", (error) => {
         logger.error("FFmpeg process error", {
           guildId,
           title: nextTrack.title,
@@ -331,7 +376,7 @@ class MusicManager {
         });
       });
 
-      ffmpeg.process.on("close", (code, signal) => {
+      ffmpeg.on("close", (code, signal) => {
         const elapsedMs = playbackStartedAtMs
           ? Date.now() - playbackStartedAtMs
           : null;
@@ -346,7 +391,7 @@ class MusicManager {
         });
       });
 
-      const resource = createAudioResource(ffmpeg, {
+      const resource = createAudioResource(ffmpeg.stdout, {
         inputType: StreamType.Raw,
         metadata: resourceMetadata,
       });
