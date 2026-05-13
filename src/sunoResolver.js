@@ -343,6 +343,9 @@ function spotifyTrackToQueueTrack(track, index) {
     sourceUrl: `ytsearch1:${query}`,
     sourceLabel: "Spotify",
     spotifyUri: track.uri,
+    spotifyArtist: track.artist || null,
+    spotifyTitle: track.name,
+    youtubeSearchQuery: query,
     durationMs: track.duration,
     requestedFrom: "spotify",
     index,
@@ -498,6 +501,7 @@ function normalizeTrack(entry, fallbackUrl, index) {
   return {
     title: entry.title || `Track ${index + 1}`,
     sourceUrl,
+    youtubeVideoId: getYouTubeVideoId(entry) || getYouTubeVideoIdFromUrl(sourceUrl),
   };
 }
 
@@ -535,6 +539,22 @@ function getYouTubeVideoId(entry) {
   }
 
   return null;
+}
+
+function getYouTubeVideoIdFromUrl(input) {
+  if (!input) return null;
+  try {
+    const parsed = new URL(input);
+    if (parsed.hostname === "youtu.be") {
+      const videoId = parsed.pathname.replace(/^\/+/, "").split("/")[0];
+      return YOUTUBE_VIDEO_ID_RE.test(videoId) ? videoId : null;
+    }
+
+    const videoId = parsed.searchParams.get("v");
+    return videoId && YOUTUBE_VIDEO_ID_RE.test(videoId) ? videoId : null;
+  } catch {
+    return null;
+  }
 }
 
 function getSunoProfileHandle(input) {
@@ -739,6 +759,25 @@ async function fetchSunoClipAudioUrl(songId) {
 async function resolveStreamUrl(sourceUrl) {
   logger.info("Resolving stream URL", { sourceUrl });
 
+  return resolveStreamUrlForTrack({ sourceUrl });
+}
+
+async function resolveStreamUrlForTrack(track) {
+  const originalSourceUrl = track.sourceUrl;
+  let sourceUrl = originalSourceUrl;
+  logger.info("Resolving stream URL for track", {
+    sourceUrl,
+    requestedFrom: track.requestedFrom || null,
+    title: track.title || null,
+  });
+
+  if (track.requestedFrom === "spotify") {
+    const match = await resolveSpotifyYouTubeMatch(track);
+    if (match?.sourceUrl) {
+      sourceUrl = match.sourceUrl;
+    }
+  }
+
   // yt-dlp cannot render Suno's JS and can return a silence placeholder instead.
   // Prefer Suno's clip API when a song UUID is available.
   const sunoMatch = SUNO_SONG_UUID_RE.exec(sourceUrl);
@@ -755,7 +794,7 @@ async function resolveStreamUrl(sourceUrl) {
     return cdnUrl;
   }
 
-  const output = isYouTubeUrl(sourceUrl)
+  const output = isYouTubeUrl(sourceUrl) || sourceUrl.startsWith("ytsearch")
     ? await resolveYouTubeStreamOutput(sourceUrl)
     : await runYtDlp([
     "-g",
@@ -778,10 +817,39 @@ async function resolveStreamUrl(sourceUrl) {
 
   logger.info("Resolved stream candidate", {
     sourceUrl,
+    originalSourceUrl,
     candidateCount: candidates.length,
   });
 
   return candidates[candidates.length - 1];
+}
+
+async function resolveSpotifyYouTubeMatch(track) {
+  const output = await runYtDlp([
+    "--dump-single-json",
+    "--no-warnings",
+    "--flat-playlist",
+    track.sourceUrl,
+  ]);
+
+  const data = JSON.parse(output);
+  const entry = Array.isArray(data.entries) ? data.entries[0] : data;
+  const youtubeVideoId = getYouTubeVideoId(entry);
+  const sourceUrl = youtubeVideoId
+    ? `https://www.youtube.com/watch?v=${youtubeVideoId}`
+    : normalizeTrackSourceUrl(entry, track.sourceUrl);
+
+  logger.info("Resolved Spotify track to YouTube video", {
+    spotifyUri: track.spotifyUri || null,
+    spotifyArtist: track.spotifyArtist || null,
+    spotifyTitle: track.spotifyTitle || track.title || null,
+    youtubeSearchQuery: track.youtubeSearchQuery || track.sourceUrl,
+    youtubeVideoId: youtubeVideoId || getYouTubeVideoIdFromUrl(sourceUrl),
+    youtubeTitle: entry?.title || null,
+    youtubeUrl: sourceUrl,
+  });
+
+  return { sourceUrl, youtubeVideoId, youtubeTitle: entry?.title || null };
 }
 
 async function resolveYouTubeStreamOutput(sourceUrl) {
@@ -930,6 +998,7 @@ module.exports = {
   extractSpotifyTracks,
   fetchSunoProfileTracks,
   resolveStreamUrl,
+  resolveStreamUrlForTrack,
   fetchRadioTracks,
   fetchRadioSongTracks,
 };

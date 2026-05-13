@@ -10,7 +10,7 @@ const {
 } = require("@discordjs/voice");
 const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
-const { resolveStreamUrl } = require("./sunoResolver");
+const { resolveStreamUrlForTrack } = require("./sunoResolver");
 const logger = require("./logger");
 
 function readPositiveIntEnv(name, fallback) {
@@ -308,7 +308,7 @@ class MusicManager {
         title: nextTrack.title,
         sourceUrl: nextTrack.sourceUrl,
       });
-      const streamUrl = await resolveStreamUrl(nextTrack.sourceUrl);
+      const streamUrl = await resolveStreamUrlForTrack(nextTrack);
       logger.debug("Resolved stream URL", {
         guildId,
         title: nextTrack.title,
