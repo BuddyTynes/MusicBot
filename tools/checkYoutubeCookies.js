@@ -13,6 +13,7 @@ const YT_DLP_YOUTUBE_FALLBACK_EXTRACTOR_ARGS = [
   "youtube:player_client=tv,android_vr,android,web_embedded",
   "youtube:player_client=tv,android_vr,android,web_embedded,web_safari;formats=missing_pot",
 ].filter((value, index, values) => values.indexOf(value) === index);
+const YT_DLP_JS_RUNTIME = process.env.YT_DLP_JS_RUNTIME?.trim() || `node:${process.execPath}`;
 const LIKELY_AUTH_COOKIE_NAMES = new Set([
   "SID",
   "HSID",
@@ -128,6 +129,10 @@ function getCookieArgs() {
   return { source: "none", args: [] };
 }
 
+function getRuntimeArgs() {
+  return YT_DLP_JS_RUNTIME ? ["--js-runtimes", YT_DLP_JS_RUNTIME] : [];
+}
+
 function trim(value, maxLength = 1200) {
   if (!value || value.length <= maxLength) {
     return value || "";
@@ -187,7 +192,7 @@ function runYtDlp(command, args) {
 async function runMetadataCheck(command, cookie, testUrl) {
   const args = [
     ...cookie.args,
-    "--no-warnings",
+    ...getRuntimeArgs(),
     "--skip-download",
     "--no-playlist",
     "--ignore-no-formats-error",
@@ -208,8 +213,8 @@ async function runStreamCheck(command, cookie, testUrl) {
   for (const extractorArgs of YT_DLP_YOUTUBE_FALLBACK_EXTRACTOR_ARGS) {
     const args = [
       ...cookie.args,
+      ...getRuntimeArgs(),
       "-g",
-      "--no-warnings",
       "--no-playlist",
       "--no-check-formats",
       "-f",
@@ -244,8 +249,8 @@ async function runStreamCheck(command, cookie, testUrl) {
 async function listFormats(command, cookie, testUrl) {
   const args = [
     ...cookie.args,
+    ...getRuntimeArgs(),
     "--list-formats",
-    "--no-warnings",
     "--no-playlist",
     "--ignore-no-formats-error",
     testUrl,
@@ -266,6 +271,7 @@ async function main() {
 
   console.log(`yt-dlp: ${command}`);
   console.log(`cookie source: ${cookie.source}`);
+  console.log(`js runtime: ${YT_DLP_JS_RUNTIME || "yt-dlp default"}`);
   console.log(`test url: ${testUrl}`);
 
   await runMetadataCheck(command, cookie, testUrl);

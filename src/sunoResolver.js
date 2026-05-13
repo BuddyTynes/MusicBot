@@ -13,6 +13,7 @@ const YT_DLP_YOUTUBE_FALLBACK_EXTRACTOR_ARGS = [
   "youtube:player_client=tv,android_vr,android,web_embedded",
   "youtube:player_client=tv,android_vr,android,web_embedded,web_safari;formats=missing_pot",
 ];
+const YT_DLP_JS_RUNTIME = process.env.YT_DLP_JS_RUNTIME?.trim() || `node:${process.execPath}`;
 const SUNO_API_BASE = "https://studio-api.prod.suno.com";
 const SUNO_PROFILE_PAGE_SIZE = 20;
 const SUNO_MAX_PLAYLIST_TRACKS = Math.max(1, Number(process.env.SUNO_MAX_PLAYLIST_TRACKS) || 1000);
@@ -132,10 +133,14 @@ function getConfiguredYouTubeExtractorArgs() {
   return configured ? [configured] : [];
 }
 
+function getYtDlpRuntimeArgs() {
+  return YT_DLP_JS_RUNTIME ? ["--js-runtimes", YT_DLP_JS_RUNTIME] : [];
+}
+
 function runYtDlp(args) {
   return new Promise((resolve, reject) => {
     const command = resolveYtDlpCommand();
-    const finalArgs = [...getYtDlpAuthArgs(), ...args];
+    const finalArgs = [...getYtDlpAuthArgs(), ...getYtDlpRuntimeArgs(), ...args];
     logger.info("Running yt-dlp", { command, args: finalArgs });
     const child = spawn(command, finalArgs, { windowsHide: true });
     let stdout = "";
@@ -195,6 +200,12 @@ function runYtDlp(args) {
         code,
         stdoutPreview: trimForLog(stdout),
       });
+      if (stderr.trim()) {
+        logger.warn("yt-dlp stderr", {
+          args: finalArgs,
+          stderr: trimForLog(stderr),
+        });
+      }
       resolve(stdout.trim());
     });
   });
@@ -784,7 +795,6 @@ async function resolveYouTubeStreamOutput(sourceUrl) {
   for (const extractorArgs of extractorArgsAttempts) {
     const args = [
       "-g",
-      "--no-warnings",
       "--no-playlist",
       "--no-check-formats",
       "-f",

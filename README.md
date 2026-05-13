@@ -53,6 +53,8 @@ YT_DLP_COOKIES_FROM_BROWSER=
 # Optional: tune YouTube playback if yt-dlp reports requested format unavailable.
 YT_DLP_YOUTUBE_FORMAT=
 YT_DLP_YOUTUBE_EXTRACTOR_ARGS=
+# Optional: override JavaScript runtime for YouTube player challenges. Defaults to node:<current node path>.
+YT_DLP_JS_RUNTIME=
 SUNO_MAX_PLAYLIST_TRACKS=1000
 SUNO_DEFAULT_PROFILE_TRACKS=25
 SUNO_MAX_PROFILE_TRACKS=500
@@ -99,6 +101,7 @@ npm run check:youtube-cookies
 - If FFmpeg exits with `SIGSEGV` on a Linux server, install system FFmpeg and set `FFMPEG_PATH=/usr/bin/ffmpeg`.
 - If YouTube says "Sign in to confirm you're not a bot", export cookies from a browser that can play YouTube and save them as `youtube-cookies.txt` in the app directory, beside `package.json`. The file is ignored by git and is passed directly to `yt-dlp`. `YT_DLP_COOKIES_FROM_BROWSER=firefox` can also work on desktop hosts.
 - If YouTube says "Requested format is not available", run `npm run check:youtube-cookies`. The bot tries normal audio formats first, then alternate YouTube player clients. You can override the selector with `YT_DLP_YOUTUBE_FORMAT`.
+- If the format list only shows `sb*` storyboard/image formats, make sure the checker prints a usable `js runtime`. You can set `YT_DLP_JS_RUNTIME=node:/usr/bin/node` on the server.
 - If YouTube playback fails after install, run `npm install` again and check that Python 3.7+ is available as `python3`.
 - Depending on Suno or extractor changes, `yt-dlp` support may need updates.
 
