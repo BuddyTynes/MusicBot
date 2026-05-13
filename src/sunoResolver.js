@@ -7,6 +7,12 @@ const logger = require("./logger");
 const YT_DLP_TIMEOUT_MS = Number(process.env.YT_DLP_TIMEOUT_MS || 45000);
 const YT_DLP_COOKIES_FROM_BROWSER = process.env.YT_DLP_COOKIES_FROM_BROWSER?.trim();
 const YT_DLP_COOKIES_FILE = path.resolve(__dirname, "..", "youtube-cookies.txt");
+const YT_DLP_YOUTUBE_FORMAT = process.env.YT_DLP_YOUTUBE_FORMAT?.trim()
+  || "bestaudio[protocol^=http]/bestaudio/best[protocol^=http]/best/18/worst";
+const YT_DLP_YOUTUBE_FALLBACK_EXTRACTOR_ARGS = [
+  "youtube:player_client=tv,android_vr,android,web_embedded",
+  "youtube:player_client=tv,android_vr,android,web_embedded,web_safari;formats=missing_pot",
+];
 const SUNO_API_BASE = "https://studio-api.prod.suno.com";
 const SUNO_PROFILE_PAGE_SIZE = 20;
 const SUNO_MAX_PLAYLIST_TRACKS = Math.max(1, Number(process.env.SUNO_MAX_PLAYLIST_TRACKS) || 1000);
@@ -107,11 +113,23 @@ function formatYtDlpError(stderr, code) {
     ].join(" ");
   }
 
+  if (/requested format is not available/i.test(text)) {
+    return [
+      "YouTube did not return a streamable format for yt-dlp.",
+      "Run npm run check:youtube-cookies to inspect metadata, stream fallback attempts, and available formats.",
+    ].join(" ");
+  }
+
   const firstErrorLine = text
     .split(/\r?\n/)
     .map((line) => line.trim())
     .find((line) => line && !line.startsWith("["));
   return trimForLog(firstErrorLine || text || `yt-dlp exited with code ${code}`, 700);
+}
+
+function getConfiguredYouTubeExtractorArgs() {
+  const configured = process.env.YT_DLP_YOUTUBE_EXTRACTOR_ARGS?.trim();
+  return configured ? [configured] : [];
 }
 
 function runYtDlp(args) {
@@ -726,7 +744,9 @@ async function resolveStreamUrl(sourceUrl) {
     return cdnUrl;
   }
 
-  const output = await runYtDlp([
+  const output = isYouTubeUrl(sourceUrl)
+    ? await resolveYouTubeStreamOutput(sourceUrl)
+    : await runYtDlp([
     "-g",
     "--no-warnings",
     "--no-playlist",
@@ -751,6 +771,75 @@ async function resolveStreamUrl(sourceUrl) {
   });
 
   return candidates[candidates.length - 1];
+}
+
+async function resolveYouTubeStreamOutput(sourceUrl) {
+  const extractorArgsAttempts = [
+    null,
+    ...getConfiguredYouTubeExtractorArgs(),
+    ...YT_DLP_YOUTUBE_FALLBACK_EXTRACTOR_ARGS,
+  ].filter((value, index, values) => values.indexOf(value) === index);
+
+  let lastError = null;
+  for (const extractorArgs of extractorArgsAttempts) {
+    const args = [
+      "-g",
+      "--no-warnings",
+      "--no-playlist",
+      "--no-check-formats",
+      "-f",
+      YT_DLP_YOUTUBE_FORMAT,
+    ];
+
+    if (extractorArgs) {
+      args.push("--extractor-args", extractorArgs);
+    }
+
+    args.push(sourceUrl);
+
+    try {
+      logger.info("Resolving YouTube stream with yt-dlp", {
+        sourceUrl,
+        format: YT_DLP_YOUTUBE_FORMAT,
+        extractorArgs,
+      });
+      return await runYtDlp(args);
+    } catch (error) {
+      lastError = error;
+      logger.warn("YouTube stream attempt failed", {
+        sourceUrl,
+        format: YT_DLP_YOUTUBE_FORMAT,
+        extractorArgs,
+        error: logger.serializeError(error),
+      });
+    }
+  }
+
+  await logYouTubeFormats(sourceUrl);
+  throw lastError || new Error("Could not resolve YouTube stream URL.");
+}
+
+async function logYouTubeFormats(sourceUrl) {
+  const args = [
+    "--list-formats",
+    "--no-warnings",
+    "--no-playlist",
+    "--ignore-no-formats-error",
+    sourceUrl,
+  ];
+
+  try {
+    const output = await runYtDlp(args);
+    logger.warn("YouTube available formats", {
+      sourceUrl,
+      output: trimForLog(output, 2000),
+    });
+  } catch (error) {
+    logger.warn("Could not list YouTube formats", {
+      sourceUrl,
+      error: logger.serializeError(error),
+    });
+  }
 }
 
 async function fetchRadioTracks(count = 10) {

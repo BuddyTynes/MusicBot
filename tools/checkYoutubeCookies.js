@@ -5,6 +5,14 @@ const path = require("node:path");
 const DEFAULT_TEST_URL = "https://www.youtube.com/watch?v=1KdQvhlINIk";
 const COOKIE_FILE = path.resolve(__dirname, "..", "youtube-cookies.txt");
 const YT_DLP_TIMEOUT_MS = Number(process.env.YT_DLP_TIMEOUT_MS || 45000);
+const YT_DLP_YOUTUBE_FORMAT = process.env.YT_DLP_YOUTUBE_FORMAT?.trim()
+  || "bestaudio[protocol^=http]/bestaudio/best[protocol^=http]/best/18/worst";
+const YT_DLP_YOUTUBE_FALLBACK_EXTRACTOR_ARGS = [
+  null,
+  process.env.YT_DLP_YOUTUBE_EXTRACTOR_ARGS?.trim() || null,
+  "youtube:player_client=tv,android_vr,android,web_embedded",
+  "youtube:player_client=tv,android_vr,android,web_embedded,web_safari;formats=missing_pot",
+].filter((value, index, values) => values.indexOf(value) === index);
 const LIKELY_AUTH_COOKIE_NAMES = new Set([
   "SID",
   "HSID",
@@ -138,25 +146,8 @@ function explainCookieRejection(errorMessage) {
   console.log("Make sure the export includes all YouTube/Google auth rows, not only LOGIN_INFO.");
 }
 
-async function main() {
-  const testUrl = process.argv[2] || DEFAULT_TEST_URL;
-  const command = resolveYtDlpCommand();
-  const cookie = getCookieArgs();
-  const args = [
-    ...cookie.args,
-    "--no-warnings",
-    "--skip-download",
-    "--no-playlist",
-    "--print",
-    "%(extractor)s\t%(id)s\t%(title)s\t%(duration_string)s",
-    testUrl,
-  ];
-
-  console.log(`yt-dlp: ${command}`);
-  console.log(`cookie source: ${cookie.source}`);
-  console.log(`test url: ${testUrl}`);
-
-  await new Promise((resolve, reject) => {
+function runYtDlp(command, args) {
+  return new Promise((resolve, reject) => {
     const child = spawn(command, args, { windowsHide: true });
     let stdout = "";
     let stderr = "";
@@ -188,13 +179,97 @@ async function main() {
         return;
       }
 
-      console.log(`OK: ${stdout.trim()}`);
-      if (stderr.trim()) {
-        console.log(`stderr: ${trim(stderr.trim())}`);
-      }
-      resolve();
+      resolve({ stdout: stdout.trim(), stderr: stderr.trim() });
     });
   });
+}
+
+async function runMetadataCheck(command, cookie, testUrl) {
+  const args = [
+    ...cookie.args,
+    "--no-warnings",
+    "--skip-download",
+    "--no-playlist",
+    "--ignore-no-formats-error",
+    "--print",
+    "%(extractor)s\t%(id)s\t%(title)s\t%(duration_string)s",
+    testUrl,
+  ];
+
+  const result = await runYtDlp(command, args);
+  console.log(`metadata OK: ${result.stdout}`);
+  if (result.stderr) {
+    console.log(`metadata stderr: ${trim(result.stderr)}`);
+  }
+}
+
+async function runStreamCheck(command, cookie, testUrl) {
+  let lastError = null;
+  for (const extractorArgs of YT_DLP_YOUTUBE_FALLBACK_EXTRACTOR_ARGS) {
+    const args = [
+      ...cookie.args,
+      "-g",
+      "--no-warnings",
+      "--no-playlist",
+      "--no-check-formats",
+      "-f",
+      YT_DLP_YOUTUBE_FORMAT,
+    ];
+
+    if (extractorArgs) {
+      args.push("--extractor-args", extractorArgs);
+    }
+
+    args.push(testUrl);
+
+    try {
+      const result = await runYtDlp(command, args);
+      const urls = result.stdout.split(/\r?\n/).filter((line) => /^https?:\/\//.test(line));
+      console.log(`stream OK: ${urls.length} URL(s) using format ${YT_DLP_YOUTUBE_FORMAT}`);
+      console.log(`stream extractor args: ${extractorArgs || "default"}`);
+      if (result.stderr) {
+        console.log(`stream stderr: ${trim(result.stderr)}`);
+      }
+      return;
+    } catch (error) {
+      lastError = error;
+      console.log(`stream attempt failed (${extractorArgs || "default"}): ${error.message}`);
+    }
+  }
+
+  await listFormats(command, cookie, testUrl);
+  throw lastError || new Error("No stream attempt succeeded.");
+}
+
+async function listFormats(command, cookie, testUrl) {
+  const args = [
+    ...cookie.args,
+    "--list-formats",
+    "--no-warnings",
+    "--no-playlist",
+    "--ignore-no-formats-error",
+    testUrl,
+  ];
+
+  try {
+    const result = await runYtDlp(command, args);
+    console.log(`available formats:\n${trim(result.stdout, 2500)}`);
+  } catch (error) {
+    console.log(`could not list formats: ${error.message}`);
+  }
+}
+
+async function main() {
+  const testUrl = process.argv[2] || DEFAULT_TEST_URL;
+  const command = resolveYtDlpCommand();
+  const cookie = getCookieArgs();
+
+  console.log(`yt-dlp: ${command}`);
+  console.log(`cookie source: ${cookie.source}`);
+  console.log(`test url: ${testUrl}`);
+
+  await runMetadataCheck(command, cookie, testUrl);
+  await runStreamCheck(command, cookie, testUrl);
 }
 
 main().catch((error) => {
