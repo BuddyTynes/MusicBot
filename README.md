@@ -111,20 +111,10 @@ npm run check:youtube-cookies
 - Logs are written to `src/logs/bot.log` and still appear in the terminal.
 - On the server, run `tail -f src/logs/bot.log` while testing playback.
 
-## Converting Chrome Cookies
+## YouTube Cookies
 
-If you do not want to use a browser extension, copy rows from Chrome DevTools locally:
+Follow yt-dlp's cookie export instructions for YouTube:
 
-1. Open YouTube while logged in.
-2. Open DevTools, then Application > Storage > Cookies > `https://www.youtube.com`.
-3. Select the cookie rows and copy them.
-4. Paste them into a local file named `chrome-cookies.tsv`.
-5. Run:
+[Exporting YouTube cookies](https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies)
 
-```bash
-node tools/convertChromeCookies.js chrome-cookies.tsv youtube-cookies.txt
-```
-
-Use the output filename argument instead of shell redirection on Windows PowerShell, because `>` can write UTF-16 files that `yt-dlp` cannot read.
-
-Keep `youtube-cookies.txt` in the app directory beside `package.json`. The bot will use it automatically on the next playback request. Keep both files private; they are ignored by git.
+Save the exported Netscape-format cookie file as `youtube-cookies.txt` in the app directory. The bot will use it automatically on the next playback request. Keep this file private; it is ignored by git.

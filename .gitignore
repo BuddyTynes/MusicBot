@@ -5,7 +5,4 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 src/logs/
-ssh keys/
-ssh/
-chrome-cookies*.tsv
 youtube-cookies*.txt

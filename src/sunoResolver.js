@@ -78,7 +78,9 @@ function resolveYtDlpCookiesFile() {
 function validateYtDlpCookiesFile(cookieFile) {
   const bytes = fs.readFileSync(cookieFile);
   if (bytes.length === 0) {
-    throw new Error("youtube-cookies.txt is empty. Regenerate it from Chrome DevTools cookies.");
+    throw new Error(
+      "youtube-cookies.txt is empty. Regenerate it with yt-dlp's YouTube cookie export instructions: https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies",
+    );
   }
 
   const hasUtf16Bom =
@@ -88,7 +90,7 @@ function validateYtDlpCookiesFile(cookieFile) {
 
   if (hasUtf16Bom || hasNulByteNearStart) {
     throw new Error(
-      "youtube-cookies.txt is not UTF-8. Regenerate it with: node tools/convertChromeCookies.js chrome-cookies.tsv youtube-cookies.txt",
+      "youtube-cookies.txt is not UTF-8. Regenerate it with yt-dlp's YouTube cookie export instructions: https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies",
     );
   }
 }

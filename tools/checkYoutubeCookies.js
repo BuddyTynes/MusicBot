@@ -59,7 +59,7 @@ function validateUtf8CookieFile(cookieFile) {
 
   if (hasUtf16Bom || hasNulByteNearStart) {
     throw new Error(
-      `${path.basename(cookieFile)} is not UTF-8. Regenerate it with: node tools/convertChromeCookies.js chrome-cookies.tsv youtube-cookies.txt`,
+      `${path.basename(cookieFile)} is not UTF-8. Regenerate it with yt-dlp's YouTube cookie export instructions: https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies`,
     );
   }
 }
